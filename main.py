@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 import shutil
 import ctypes
@@ -11,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QPushButton, QMessageBox, QInputDialog, QLineEdit,
                              QComboBox, QSlider, QCheckBox, QTextEdit, QDialog)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QSoundEffect
-from PyQt6.QtCore import Qt, QMimeData, QUrl, QSize, QFileSystemWatcher, QTimer, QRectF, QRegularExpression, pyqtSignal, QThread
+from PyQt6.QtCore import Qt, QMimeData, QUrl, QSize, QFileSystemWatcher, QTimer, QRectF, QRegularExpression
 from PyQt6.QtGui import QClipboard, QRegularExpressionValidator, QDrag, QFont, QIcon, QColor, QPainter, QBrush, QPen
 
 # Win32 COM library for deep Windows Shell inspection
@@ -19,13 +18,6 @@ try:
     import win32com.client
 except ImportError:
     win32com = None
-
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WhisperModel = None
-    WHISPER_AVAILABLE = False
 
 # Paths
 SOURCE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "ACD Agent Module" / "Downloads"
@@ -53,50 +45,6 @@ CUSTOM_RESTORE_SOUND = Path(os.path.dirname(os.path.abspath(__file__))) / "resto
 
 # Define Win32 Callback for window iteration
 EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-
-PHONE_REGEX_PATTERNS = [
-    r"\+?1[\s\-\.]*\(?([2-9]\d{2})\)?[\s\-\.]*([2-9]\d{2})[\s\-\.]*([0-9]{4})",
-    r"\b([2-9]\d{2})[\s\-\.]*([2-9]\d{2})[\s\-\.]*([0-9]{4})\b",
-    r"\b([2-9]\d{2})[\s\-\.]*([0-9]{4})\b",
-    r"\b(\d{10})\b",
-]
-
-
-def extract_phone_from_transcript(transcript):
-    if not transcript:
-        return ""
-    for pattern in PHONE_REGEX_PATTERNS:
-        match = re.search(pattern, transcript)
-        if match:
-            return "".join(match.groups())
-    digits = ''.join(ch for ch in transcript if ch.isdigit())
-    if len(digits) >= 10:
-        return digits[:10]
-    if len(digits) >= 7:
-        return digits[:7]
-    return ""
-
-
-class TranscriptionWorker(QThread):
-    result_ready = pyqtSignal(str, str, str)
-
-    def __init__(self, file_path):
-        super().__init__()
-        self.file_path = file_path
-
-    def run(self):
-        if not WHISPER_AVAILABLE:
-            self.result_ready.emit("", "", "Install faster-whisper to enable transcription.")
-            return
-
-        try:
-            model = WhisperModel("small", device="cpu", compute_type="int8")
-            segments, _ = model.transcribe(str(self.file_path), beam_size=5, language="en")
-            transcript = " ".join(segment.text.strip() for segment in segments if segment.text.strip())
-            phone = extract_phone_from_transcript(transcript)
-            self.result_ready.emit(transcript, phone, "")
-        except Exception as exc:
-            self.result_ready.emit("", "", f"Transcription failed: {exc}")
 
 # --- FULL DARK THEME DESIGN STYLESHEET (QSS) ---
 DARK_THEME_STYLE = """
