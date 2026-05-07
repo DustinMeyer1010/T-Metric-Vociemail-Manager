@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import shutil
 import ctypes
@@ -9,8 +10,8 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidget, QListWidgetItem, QLabel, QHBoxLayout, 
                              QPushButton, QMessageBox, QInputDialog, QLineEdit,
                              QComboBox, QSlider, QCheckBox, QTextEdit, QDialog)
-from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
-from PyQt6.QtCore import Qt, QMimeData, QUrl, QSize, QFileSystemWatcher, QTimer, QRectF, QRegularExpression
+from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QSoundEffect
+from PyQt6.QtCore import Qt, QMimeData, QUrl, QSize, QFileSystemWatcher, QTimer, QRectF, QRegularExpression, pyqtSignal, QThread
 from PyQt6.QtGui import QClipboard, QRegularExpressionValidator, QDrag, QFont, QIcon, QColor, QPainter, QBrush, QPen
 
 # Win32 COM library for deep Windows Shell inspection
@@ -18,6 +19,13 @@ try:
     import win32com.client
 except ImportError:
     win32com = None
+
+try:
+    from faster_whisper import WhisperModel
+    WHISPER_AVAILABLE = True
+except ImportError:
+    WhisperModel = None
+    WHISPER_AVAILABLE = False
 
 # Paths
 SOURCE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "ACD Agent Module" / "Downloads"
@@ -41,9 +49,54 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 TOPMOST_FLAGS = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+CUSTOM_RESTORE_SOUND = Path(os.path.dirname(os.path.abspath(__file__))) / "restore_sound.wav"
 
 # Define Win32 Callback for window iteration
 EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+PHONE_REGEX_PATTERNS = [
+    r"\+?1[\s\-\.]*\(?([2-9]\d{2})\)?[\s\-\.]*([2-9]\d{2})[\s\-\.]*([0-9]{4})",
+    r"\b([2-9]\d{2})[\s\-\.]*([2-9]\d{2})[\s\-\.]*([0-9]{4})\b",
+    r"\b([2-9]\d{2})[\s\-\.]*([0-9]{4})\b",
+    r"\b(\d{10})\b",
+]
+
+
+def extract_phone_from_transcript(transcript):
+    if not transcript:
+        return ""
+    for pattern in PHONE_REGEX_PATTERNS:
+        match = re.search(pattern, transcript)
+        if match:
+            return "".join(match.groups())
+    digits = ''.join(ch for ch in transcript if ch.isdigit())
+    if len(digits) >= 10:
+        return digits[:10]
+    if len(digits) >= 7:
+        return digits[:7]
+    return ""
+
+
+class TranscriptionWorker(QThread):
+    result_ready = pyqtSignal(str, str, str)
+
+    def __init__(self, file_path):
+        super().__init__()
+        self.file_path = file_path
+
+    def run(self):
+        if not WHISPER_AVAILABLE:
+            self.result_ready.emit("", "", "Install faster-whisper to enable transcription.")
+            return
+
+        try:
+            model = WhisperModel("small", device="cpu", compute_type="int8")
+            segments, _ = model.transcribe(str(self.file_path), beam_size=5, language="en")
+            transcript = " ".join(segment.text.strip() for segment in segments if segment.text.strip())
+            phone = extract_phone_from_transcript(transcript)
+            self.result_ready.emit(transcript, phone, "")
+        except Exception as exc:
+            self.result_ready.emit("", "", f"Transcription failed: {exc}")
 
 # --- FULL DARK THEME DESIGN STYLESHEET (QSS) ---
 DARK_THEME_STYLE = """
@@ -462,6 +515,12 @@ class VoicemailManager(QMainWindow):
         self.media_player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.media_player.setAudioOutput(self.audio_output)
+        self.restore_sound = QSoundEffect()
+        if CUSTOM_RESTORE_SOUND.exists():
+            self.restore_sound.setSource(QUrl.fromLocalFile(str(CUSTOM_RESTORE_SOUND)))
+            self.restore_sound.setVolume(0.8)
+        else:
+            self.restore_sound = None
         self.reviewed_files = set()
         self.current_file_duration_ms = 0
         self.known_workspace_signatures = set()
@@ -584,9 +643,9 @@ class VoicemailManager(QMainWindow):
         controls_layout.setSpacing(8)
         
         self.play_btn = QPushButton("▶")
-        self.play_btn.setFixedSize(30, 50)
+        self.play_btn.setFixedSize(40, 50)
         self.play_btn.setFont(QFont("Segoe UI", 12))
-        self.play_btn.setMinimumWidth(30)
+        self.play_btn.setMinimumWidth(40)
         self.play_btn.setObjectName("play_btn")
         controls_layout.addWidget(self.play_btn)
 
@@ -836,6 +895,16 @@ class VoicemailManager(QMainWindow):
             if is_target_window:
                 if ctypes.windll.user32.IsIconic(hwnd):
                     ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+                    if self.restore_sound:
+                        try:
+                            self.restore_sound.play()
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            ctypes.windll.user32.MessageBeep(0x00000030)
+                        except Exception:
+                            pass
                 
                 # Push visual depth layer if it isn't currently assigned as the active layout pane
                 foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
