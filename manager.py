@@ -13,10 +13,10 @@ from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudio
 from PyQt6.QtCore import Qt, QUrl, QFileSystemWatcher, QTimer, QSize, QRegularExpression
 from PyQt6.QtGui import QIcon, QColor, QFont, QClipboard, QRegularExpressionValidator
 
-from constants import (SOURCE_DIR, ICON_PATH, CACHE_DIR, WORKSPACE_DIR,
+from constants import (SOURCE_DIR, ICON_PATH, WORKSPACE_DIR,
                        CACHE_FILE, CONFIG_FILE, CUSTOM_RESTORE_SOUND,
                        HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
-                       DARK_THEME_STYLE)
+                       DARK_THEME_STYLE, SW_RESTORE)
 from ui_components import InfoDialog, WaveformProgressBar, DraggableListWidget
 
 try:
@@ -379,8 +379,6 @@ class VoicemailManager(QMainWindow):
         QTimer.singleShot(1500, lambda: self.status_label.setText(original_text))
 
     def ensure_tmetrics_popup_on_top(self):
-        if not self.always_on_top_cb.isChecked():
-            return
 
         manager_hwnd = int(self.winId())
         if manager_hwnd:

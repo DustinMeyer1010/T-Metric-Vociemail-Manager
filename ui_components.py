@@ -1,11 +1,9 @@
 import os
 import struct
-from pathlib import Path
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication)
-from PyQt6.QtMultimedia import QSoundEffect
 from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData
-from PyQt6.QtGui import QRegularExpressionValidator, QDrag, QFont, QColor, QPainter, QBrush, QPen
+from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen
 from constants import DARK_THEME_STYLE
 
 
