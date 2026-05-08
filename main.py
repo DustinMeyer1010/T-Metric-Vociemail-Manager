@@ -32,7 +32,7 @@ def main():
         if getattr(sys, 'frozen', False):
             app.setWindowIcon(QIcon(os.path.abspath(sys.executable)))
 
-    window = VoicemailManager()
+    window = VoicemailManager(app)
 
     if os.path.exists(resolved_icon_path):
         window.setWindowIcon(QIcon(resolved_icon_path))
