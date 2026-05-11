@@ -4,6 +4,7 @@ import sys
 import ctypes
 import struct
 import time
+import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -309,6 +310,7 @@ class VoicemailManager(QMainWindow):
         self.refresh_sounds_in_dialog(dialog, getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL))
         dialog.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
         dialog.open_tmetrics_folder_btn.clicked.connect(self.open_tmetrics_folder)
+        dialog.github_btn.clicked.connect(self.open_project_link)
         dialog.test_sound_btn.clicked.connect(self.play_notification_sound)
         dialog.info_btn.clicked.connect(self.show_feature_info)
         dialog.theme_combo.setCurrentText(self.current_theme.title())
@@ -898,6 +900,9 @@ class VoicemailManager(QMainWindow):
             self.auto_close_folder_cb.setChecked(False)
             os.startfile(SOURCE_DIR)
 
+    def open_project_link(self):
+        webbrowser.open('https://github.com/DustinMeyer1010/T-Metric-Vociemail-Manager')
+
     def sync_from_source(self):
         if not SOURCE_DIR.exists():
             return
@@ -960,7 +965,7 @@ class VoicemailManager(QMainWindow):
 
             visible_count += 1
 
-        self.status_label.setText(f"Report issue to Dustin  |  Voicemails Displayed: {visible_count}/{len(files)}")
+        self.status_label.setText(f"Voicemails Displayed: {visible_count}/{len(files)}")
         self.list_widget.blockSignals(False)
 
         if was_empty and visible_count > 0:

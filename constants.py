@@ -62,12 +62,12 @@ DARK_THEME_STYLE = """
         font-family: "Segoe UI", sans-serif;
         font-weight: 600;
         font-size: 12px;
-        min-width: 75px;
+        min-width: 90px;
     }
 
     QPushButton#copy_btn {
         width: 125px;
-        height: 13px;
+        height: 14px;
     }
 
     QPushButton#play_btn {
@@ -328,12 +328,12 @@ LIGHT_THEME_STYLE = """
         font-family: "Segoe UI", sans-serif;
         font-weight: 600;
         font-size: 12px;
-        min-width: 75px;
+        min-width: 90px;
     }
 
     QPushButton#copy_btn {
         width: 125px;
-        height: 13px;
+        height: 14px;
     }
 
     QPushButton#play_btn {

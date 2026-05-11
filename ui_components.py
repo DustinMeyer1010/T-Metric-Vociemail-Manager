@@ -237,6 +237,11 @@ class SettingsDialog(QDialog):
         self.open_tmetrics_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         app_layout.addWidget(self.open_tmetrics_folder_btn)
 
+        self.github_btn = QPushButton("Source Code - GitHub")
+        self.github_btn.setFont(QFont("Segoe UI", 9))
+        self.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        app_layout.addWidget(self.github_btn)
+
         layout.addWidget(app_group)
 
         # Buttons
@@ -271,6 +276,8 @@ class SettingsDialog(QDialog):
             action_buttons.append(self.info_btn)
         if hasattr(self, 'open_tmetrics_folder_btn'):
             action_buttons.append(self.open_tmetrics_folder_btn)
+        if hasattr(self, 'github_btn'):
+            action_buttons.append(self.github_btn)
 
         for button in action_buttons:
             if theme == 'dark':
