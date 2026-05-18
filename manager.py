@@ -19,7 +19,7 @@ from PyQt6.QtGui import (QIcon, QColor, QFont, QClipboard, QRegularExpressionVal
 
 from constants import (BASE_PATH, SOURCE_DIR, ICON_PATH, WORKSPACE_DIR,
                        CACHE_FILE, CONFIG_FILE, CUSTOM_RESTORE_SOUND,
-                       SOUNDS_DIR, DEFAULT_SOUNDS_DIR, TRASH_DIR, HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
+                       SOUNDS_DIR, DEFAULT_SOUNDS_DIR, TRASH_DIR, TMETRIC_RINGTONES_DIR, HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
                        CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE, SW_RESTORE,
                        DWMWA_USE_IMMERSIVE_DARK_MODE)
 from ui_components import InfoDialog, WaveformProgressBar, DraggableListWidget, SettingsDialog, play_icon, pause_icon
@@ -70,6 +70,8 @@ class VoicemailManager(QMainWindow):
         self.reviewed_files = set()
         self.current_file_duration_ms = 0
         self.known_workspace_signatures = set()
+        self.include_notes_in_drag_drop = False
+        self.ask_before_delete = True
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -97,6 +99,7 @@ class VoicemailManager(QMainWindow):
         middle_layout.setSpacing(12)
 
         self.list_widget = DraggableListWidget()
+        self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
         self.list_widget.itemDoubleClicked.connect(self.prompt_rename)
         self.list_widget.itemSelectionChanged.connect(self.on_item_selected)
         middle_layout.addWidget(self.list_widget, stretch=7)
@@ -310,11 +313,14 @@ class VoicemailManager(QMainWindow):
         if current_device_index < 0:
             current_device_index = 0
         dialog.device_combo.setCurrentIndex(current_device_index)
+        dialog.include_notes_drag_cb.setChecked(self.include_notes_in_drag_drop)
+        dialog.ask_before_delete_cb.setChecked(self.ask_before_delete)
 
         self.refresh_sounds_in_dialog(dialog, getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL))
         dialog.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
         dialog.recover_deleted_btn.clicked.connect(self.recover_deleted_voicemail)
         dialog.open_tmetrics_folder_btn.clicked.connect(self.open_tmetrics_folder)
+        dialog.open_tmetrics_ringtones_btn.clicked.connect(self.open_tmetrics_ringtones_folder)
         dialog.github_btn.clicked.connect(self.open_project_link)
         dialog.test_sound_btn.clicked.connect(self.play_notification_sound)
         dialog.info_btn.clicked.connect(self.show_feature_info)
@@ -323,6 +329,8 @@ class VoicemailManager(QMainWindow):
             lambda index, devices=available_devices: self.on_settings_audio_device_changed(index, devices)
         )
         dialog.sound_combo.currentTextChanged.connect(self.on_settings_sound_changed)
+        dialog.include_notes_drag_cb.stateChanged.connect(self.on_include_notes_drag_changed)
+        dialog.ask_before_delete_cb.stateChanged.connect(self.on_ask_before_delete_changed)
         dialog.theme_combo.currentTextChanged.connect(
             lambda theme, dialog=dialog: self.on_settings_theme_changed(theme, dialog)
         )
@@ -475,14 +483,9 @@ class VoicemailManager(QMainWindow):
                 try:
                     with open(note_file_path, "r", encoding="utf-8") as nf:
                         file_content = nf.read()
-                    lines = file_content.split('\n', 1)
-                    if lines[0].startswith("PHONE:"):
-                        phone = lines[0].replace("PHONE:", "").strip()
-                        self.phone_number_input.setText(phone)
-                        notes_content = lines[1] if len(lines) > 1 else ""
-                        self.notes_box.setPlainText(notes_content)
-                    else:
-                        self.notes_box.setPlainText(file_content)
+                    phone, notes_content = self.parse_note_file_content(file_content)
+                    self.phone_number_input.setText(phone)
+                    self.notes_box.setPlainText(notes_content)
                 except Exception as e:
                     print(f"Error loading text notes: {e}")
         else:
@@ -516,12 +519,9 @@ class VoicemailManager(QMainWindow):
             text_content = self.notes_box.toPlainText()
             phone_content = self.phone_number_input.text().strip()
             try:
-                combined_content = ""
-                if phone_content:
-                    combined_content = f"PHONE:{phone_content}\n"
-                combined_content += text_content
+                combined_content = self.build_note_file_content(phone_content, text_content)
 
-                if not combined_content.strip() or (not phone_content and not text_content.strip()):
+                if not combined_content:
                     if note_file_path.exists():
                         os.remove(note_file_path)
                 else:
@@ -551,6 +551,23 @@ class VoicemailManager(QMainWindow):
             self.status_label.setText("Enter a valid phone number to copy.")
 
         QTimer.singleShot(1500, lambda: self.status_label.setText(original_text))
+
+    def enforce_popup_window_state(self, hwnd):
+        if ctypes.windll.user32.IsIconic(hwnd):
+            ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+
+        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+        ctypes.windll.user32.BringWindowToTop(hwnd)
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+        ctypes.windll.user32.SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            TOPMOST_FLAGS
+        )
 
     def ensure_tmetrics_popup_on_top(self):
         """
@@ -589,9 +606,6 @@ class VoicemailManager(QMainWindow):
             popup_found = {"value": False}
 
             def scan_windows_callback(hwnd, extra):
-                if not ctypes.windll.user32.IsWindowVisible(hwnd):
-                    return True
-
                 length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
                 window_title = ""
 
@@ -607,21 +621,7 @@ class VoicemailManager(QMainWindow):
 
                 if is_target_window:
                     popup_found["value"] = True
-
-                    # Restore the T-Metrics Customer Message window if minimized
-                    if ctypes.windll.user32.IsIconic(hwnd):
-                        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
-
-                    # Force the Customer Message Information window to stay always on top
-                    ctypes.windll.user32.SetWindowPos(
-                        hwnd,
-                        HWND_TOPMOST,
-                        0,
-                        0,
-                        0,
-                        0,
-                        TOPMOST_FLAGS
-                    )
+                    self.enforce_popup_window_state(hwnd)
 
                     # Stop scanning once we find the target popup
                     return False
@@ -649,8 +649,6 @@ class VoicemailManager(QMainWindow):
 
         except Exception as e:
             print(f"Error ensuring T-Metrics popup on top: {e}")
-
-        ctypes.windll.user32.EnumWindows(EnumWindowsProc(scan_windows_callback), 0)
 
     def load_reviewed_cache(self):
         if CACHE_FILE.exists():
@@ -701,6 +699,10 @@ class VoicemailManager(QMainWindow):
 
                     self.audio_device_name = lines[5].strip() if len(lines) > 5 else "System Default"
                     self.apply_saved_audio_device()
+
+                    self.include_notes_in_drag_drop = lines[6].strip() == "True" if len(lines) > 6 else False
+                    self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
+                    self.ask_before_delete = lines[7].strip() != "False" if len(lines) > 7 else True
             except Exception as e:
                 print(f"Error loading config: {e}")
             finally:
@@ -718,6 +720,8 @@ class VoicemailManager(QMainWindow):
                 f.write(f"{self.current_theme}\n")
                 f.write(f"{getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL)}\n")
                 f.write(f"{getattr(self, 'audio_device_name', 'System Default')}\n")
+                f.write(f"{getattr(self, 'include_notes_in_drag_drop', False)}\n")
+                f.write(f"{getattr(self, 'ask_before_delete', True)}\n")
         except Exception as e:
             print(f"Error saving config: {e}")
 
@@ -741,6 +745,15 @@ class VoicemailManager(QMainWindow):
             self.explorer_check_timer.start(500)
         else:
             self.explorer_check_timer.stop()
+
+    def on_include_notes_drag_changed(self, state):
+        self.include_notes_in_drag_drop = bool(state)
+        self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
+        self.save_config()
+
+    def on_ask_before_delete_changed(self, state):
+        self.ask_before_delete = bool(state)
+        self.save_config()
 
     def close_explorer_at_location(self):
         if not win32com or not self.auto_close_folder_cb.isChecked():
@@ -844,6 +857,49 @@ class VoicemailManager(QMainWindow):
         self.timeline_slider.set_range(0)
         self.timeline_slider.set_value(0)
         self.current_file_duration_ms = 0
+
+    def parse_note_file_content(self, file_content):
+        normalized = file_content.replace("\r\n", "\n").strip()
+        if not normalized:
+            return "", ""
+
+        if normalized.startswith("PHONE:"):
+            lines = normalized.split("\n", 1)
+            phone = lines[0].replace("PHONE:", "", 1).strip()
+            notes = lines[1].strip() if len(lines) > 1 else ""
+            return phone, notes
+
+        phone = ""
+        notes = normalized
+
+        lines = normalized.split("\n")
+        if lines and lines[0].startswith("Phone Number:"):
+            phone = lines[0].replace("Phone Number:", "", 1).strip()
+            remaining_lines = lines[1:]
+            if remaining_lines and not remaining_lines[0].strip():
+                remaining_lines = remaining_lines[1:]
+            if remaining_lines and remaining_lines[0].strip() == "Notes:":
+                remaining_lines = remaining_lines[1:]
+                if remaining_lines and not remaining_lines[0].strip():
+                    remaining_lines = remaining_lines[1:]
+            notes = "\n".join(remaining_lines).strip()
+
+        return phone, notes
+
+    def build_note_file_content(self, phone_content, text_content):
+        phone = phone_content.strip()
+        notes = text_content.strip()
+        sections = []
+
+        if phone:
+            sections.append(f"Phone Number: {phone}")
+        if notes:
+            if phone:
+                sections.append(f"Notes:\n{notes}")
+            else:
+                sections.append(notes)
+
+        return "\n\n".join(sections).strip()
 
     def change_audio_device(self, index):
         if index == 0:
@@ -979,6 +1035,10 @@ class VoicemailManager(QMainWindow):
             self.auto_close_folder_cb.setChecked(False)
             os.startfile(SOURCE_DIR)
 
+    def open_tmetrics_ringtones_folder(self):
+        TMETRIC_RINGTONES_DIR.mkdir(parents=True, exist_ok=True)
+        os.startfile(TMETRIC_RINGTONES_DIR)
+
 
     def restore_manager_window(self):
         """Restore and show the Voicemail Manager window when a T-Metrics popup is detected."""
@@ -1101,6 +1161,29 @@ class VoicemailManager(QMainWindow):
 
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
+    def confirm_delete_action(self, title, text, icon=QMessageBox.Icon.NoIcon, default_button=QMessageBox.StandardButton.No):
+        if not self.ask_before_delete:
+            return True
+
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(text)
+        msg_box.setIcon(icon)
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(default_button)
+        msg_box.setStyleSheet(self.current_style)
+        if msg_box.layout():
+            msg_box.layout().setContentsMargins(20, 20, 20, 20)
+
+        ask_checkbox = QCheckBox("Ask before deleting voicemails")
+        ask_checkbox.setChecked(True)
+        msg_box.setCheckBox(ask_checkbox)
+
+        confirmed = msg_box.exec() == QMessageBox.StandardButton.Yes
+        self.ask_before_delete = ask_checkbox.isChecked()
+        self.save_config()
+        return confirmed
+
     def recover_deleted_voicemail(self):
         self.purge_expired_deleted_voicemails()
         deleted_entries = self.get_deleted_voicemail_entries()
@@ -1135,7 +1218,6 @@ class VoicemailManager(QMainWindow):
         layout.addWidget(info_label)
 
         deleted_list = QListWidget()
-        deleted_list.setAlternatingRowColors(True)
         deleted_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         for entry in deleted_entries:
             deleted_date = time.strftime("%m/%d/%y %I:%M %p", time.localtime(entry["deleted_at"]))
@@ -1344,15 +1426,12 @@ class VoicemailManager(QMainWindow):
             return
 
         ws_path = Path(item.data(Qt.ItemDataRole.UserRole))
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Delete")
-        msg_box.setText(f"Delete {ws_path.name}?\n\nYou can recover it for up to {TRASH_RETENTION_DAYS} days.")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        msg_box.setStyleSheet(self.current_style)
-        if msg_box.layout():
-            msg_box.layout().setContentsMargins(20, 20, 20, 20)
+        confirmed = self.confirm_delete_action(
+            "Delete",
+            f"Delete {ws_path.name}?\n\nYou can recover it for up to {TRASH_RETENTION_DAYS} days."
+        )
 
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if confirmed:
             if ws_path.name in self.reviewed_files:
                 self.reviewed_files.discard(ws_path.name)
                 self.save_reviewed_cache()
@@ -1377,20 +1456,15 @@ class VoicemailManager(QMainWindow):
             msg_box.exec()
             return
 
-        confirm_box = QMessageBox(self)
-        confirm_box.setWindowTitle("Confirm Delete All")
-        confirm_box.setText(
+        confirmed = self.confirm_delete_action(
+            "Confirm Delete All",
             f"Delete ALL {file_count} voicemails?\n\n"
-            f"They will be recoverable for {TRASH_RETENTION_DAYS} days before permanent deletion."
+            f"They will be recoverable for {TRASH_RETENTION_DAYS} days before permanent deletion.",
+            icon=QMessageBox.Icon.Warning,
+            default_button=QMessageBox.StandardButton.No
         )
-        confirm_box.setIcon(QMessageBox.Icon.Warning)
-        confirm_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        confirm_box.setDefaultButton(QMessageBox.StandardButton.No)
-        confirm_box.setStyleSheet(self.current_style)
-        if confirm_box.layout():
-            confirm_box.layout().setContentsMargins(20, 20, 20, 20)
 
-        if confirm_box.exec() == QMessageBox.StandardButton.Yes:
+        if confirmed:
             self.reviewed_files.clear()
             self.save_reviewed_cache()
             if WORKSPACE_DIR.exists():

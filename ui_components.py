@@ -2,7 +2,7 @@ import os
 import struct
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication, QHBoxLayout,
-                             QComboBox, QStackedWidget)
+                             QComboBox, QStackedWidget, QCheckBox)
 from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF
 from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen, QIcon, QPixmap, QPolygonF
 from constants import BASE_PATH, CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE
@@ -281,10 +281,25 @@ class SettingsDialog(QDialog):
         self.recover_deleted_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         voicemail_layout.addWidget(self.recover_deleted_btn)
 
+        self.include_notes_drag_cb = QCheckBox("Include .txt note file when dragging a voicemail")
+        self.include_notes_drag_cb.setFont(QFont("Segoe UI", 9))
+        self.include_notes_drag_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        voicemail_layout.addWidget(self.include_notes_drag_cb)
+
+        self.ask_before_delete_cb = QCheckBox("Ask before deleting voicemails")
+        self.ask_before_delete_cb.setFont(QFont("Segoe UI", 9))
+        self.ask_before_delete_cb.setCursor(Qt.CursorShape.PointingHandCursor)
+        voicemail_layout.addWidget(self.ask_before_delete_cb)
+
         self.open_tmetrics_folder_btn = QPushButton("Open T-Metric Voicemail Folder")
         self.open_tmetrics_folder_btn.setFont(QFont("Segoe UI", 9))
         self.open_tmetrics_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         voicemail_layout.addWidget(self.open_tmetrics_folder_btn)
+
+        self.open_tmetrics_ringtones_btn = QPushButton("Open T-Metric Ringtones Folder")
+        self.open_tmetrics_ringtones_btn.setFont(QFont("Segoe UI", 9))
+        self.open_tmetrics_ringtones_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        voicemail_layout.addWidget(self.open_tmetrics_ringtones_btn)
 
         voicemail_layout.addStretch()
 
@@ -381,6 +396,8 @@ class SettingsDialog(QDialog):
             action_buttons.append(self.info_btn)
         if hasattr(self, 'open_tmetrics_folder_btn'):
             action_buttons.append(self.open_tmetrics_folder_btn)
+        if hasattr(self, 'open_tmetrics_ringtones_btn'):
+            action_buttons.append(self.open_tmetrics_ringtones_btn)
         if hasattr(self, 'github_btn'):
             action_buttons.append(self.github_btn)
 
@@ -567,6 +584,7 @@ class DraggableListWidget(QListWidget):
         self.setDragEnabled(True)
         self.setEditTriggers(QListWidget.EditTrigger.NoEditTriggers)
         self.setFont(QFont("Segoe UI", 11))
+        self.include_note_in_drag = False
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -583,6 +601,10 @@ class DraggableListWidget(QListWidget):
             if file_path and os.path.exists(file_path):
                 drag = QDrag(self)
                 mime_data = QMimeData()
-                mime_data.setUrls([QUrl.fromLocalFile(file_path)])
+                urls = [QUrl.fromLocalFile(file_path)]
+                note_path = os.path.splitext(file_path)[0] + ".txt"
+                if self.include_note_in_drag and os.path.exists(note_path):
+                    urls.append(QUrl.fromLocalFile(note_path))
+                mime_data.setUrls(urls)
                 drag.setMimeData(mime_data)
                 drag.exec(Qt.DropAction.CopyAction)

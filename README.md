@@ -68,6 +68,9 @@ Available settings:
 - Folder button beside notification sound: open the custom notification sounds folder.
 - `Theme`: choose dark, light, or cartoon mode.
 - `Recover Deleted Voicemails`: restore a voicemail that was deleted within the last 30 days.
+- `Include .txt Note In Drag And Drop`: when enabled, dragging a voicemail also includes its note file.
+- `Ask Before Deleting Voicemails`: controls whether delete actions show a confirmation prompt each time.
+- `Open T-Metric Ringtones Folder`: open `%APPDATA%\T-Metrics, Inc\SIP Softphone\Ringtones` so `.wav` ringtone files can be added.
 - `Feature Information`: open the in-app feature guide.
 - `Open T-Metric Voicemail Folder`: open the original T-Metrics download folder.
 

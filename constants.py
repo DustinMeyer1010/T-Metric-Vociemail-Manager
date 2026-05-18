@@ -4,6 +4,7 @@ import ctypes
 from pathlib import Path
 
 SOURCE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "ACD Agent Module" / "Downloads"
+TMETRIC_RINGTONES_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "SIP Softphone" / "Ringtones"
 ICON_PATH = "URMC.ico"
 
 CACHE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "VoicemailManager"
