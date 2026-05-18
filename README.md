@@ -57,6 +57,7 @@ The bottom buttons handle common voicemail actions:
 ## Settings
 
 Open Settings from the gear button in the top-right corner.
+Settings now open inside the main app window instead of as a separate popup.
 
 Settings are saved immediately when changed. There is no separate save step.
 

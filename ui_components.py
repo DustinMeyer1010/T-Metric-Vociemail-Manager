@@ -3,7 +3,7 @@ import struct
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication, QHBoxLayout,
                              QComboBox, QStackedWidget, QCheckBox)
-from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF
+from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF, pyqtSignal
 from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen, QIcon, QPixmap, QPolygonF
 from constants import BASE_PATH, CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE
 
@@ -145,12 +145,12 @@ class InfoDialog(QDialog):
         layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(QWidget):
+    close_requested = pyqtSignal()
+
     def __init__(self, theme, parent=None):
         super().__init__(parent)
         self.theme = theme
-        self.setWindowTitle("Settings")
-        self.resize(680, 500)
         self.section_buttons = []
 
         layout = QVBoxLayout(self)
@@ -341,9 +341,9 @@ class SettingsDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        self.save_btn = QPushButton("Close")
+        self.save_btn = QPushButton("Back")
         self.save_btn.setFixedWidth(80)
-        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.clicked.connect(self.close_requested.emit)
         button_layout.addWidget(self.save_btn)
         layout.addLayout(button_layout)
         self.apply_theme(theme)

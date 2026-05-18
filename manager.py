@@ -11,7 +11,7 @@ from urllib.parse import unquote
 
 from PyQt6.QtWidgets import (QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QCheckBox, QLineEdit, QComboBox, QTextEdit, QPushButton,
-                             QMessageBox, QInputDialog, QApplication, QListWidgetItem, QListWidget)
+                             QMessageBox, QInputDialog, QApplication, QListWidgetItem, QListWidget, QStackedWidget)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 from PyQt6.QtCore import Qt, QUrl, QFileSystemWatcher, QTimer, QSize, QRegularExpression, QRectF
 from PyQt6.QtGui import (QIcon, QColor, QFont, QClipboard, QRegularExpressionValidator,
@@ -63,7 +63,7 @@ class VoicemailManager(QMainWindow):
         self.audio_device_name = "System Default"
         self.devices_manager = QMediaDevices()
         self.devices_manager.audioOutputsChanged.connect(self.apply_saved_audio_device)
-        self.settings_dialog = None
+        self.settings_view = None
         self.loading_config = False
         self.tmetrics_popup_detected = False
 
@@ -73,9 +73,18 @@ class VoicemailManager(QMainWindow):
         self.include_notes_in_drag_drop = False
         self.ask_before_delete = True
 
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
+        self.view_stack = QStackedWidget()
+        self.setCentralWidget(self.view_stack)
+
+        self.main_view = QWidget()
+        self.settings_view = SettingsDialog(self.current_theme, self)
+        self.settings_view.close_requested.connect(self.show_main_view)
+
+        self.view_stack.addWidget(self.main_view)
+        self.view_stack.addWidget(self.settings_view)
+        self.initialize_settings_view()
+
+        main_layout = QVBoxLayout(self.main_view)
         main_layout.setContentsMargins(15, 15, 15, 15)
         main_layout.setSpacing(12)
 
@@ -290,6 +299,9 @@ class VoicemailManager(QMainWindow):
         if save:
             self.save_config()
 
+        if self.settings_view is not None:
+            self.settings_view.apply_theme(self.current_theme)
+
     def toggle_theme(self):
         next_theme = 'light' if self.current_theme == 'dark' else 'cartoon' if self.current_theme == 'light' else 'dark'
         self.apply_theme(next_theme)
@@ -298,48 +310,71 @@ class VoicemailManager(QMainWindow):
         dialog = InfoDialog(self.current_theme, self)
         dialog.exec()
 
-    def show_settings(self):
-        dialog = SettingsDialog(self.current_theme, self)
+    def initialize_settings_view(self):
+        self.settings_view.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
+        self.settings_view.recover_deleted_btn.clicked.connect(self.recover_deleted_voicemail)
+        self.settings_view.open_tmetrics_folder_btn.clicked.connect(self.open_tmetrics_folder)
+        self.settings_view.open_tmetrics_ringtones_btn.clicked.connect(self.open_tmetrics_ringtones_folder)
+        self.settings_view.github_btn.clicked.connect(self.open_project_link)
+        self.settings_view.test_sound_btn.clicked.connect(self.play_notification_sound)
+        self.settings_view.info_btn.clicked.connect(self.show_feature_info)
+        self.settings_view.sound_combo.currentTextChanged.connect(self.on_settings_sound_changed)
+        self.settings_view.include_notes_drag_cb.stateChanged.connect(self.on_include_notes_drag_changed)
+        self.settings_view.ask_before_delete_cb.stateChanged.connect(self.on_ask_before_delete_changed)
 
+    def populate_settings_view(self):
         # Populate audio devices
+        dialog = self.settings_view
+        available_devices = self.devices_manager.audioOutputs()
+
+        try:
+            dialog.device_combo.currentIndexChanged.disconnect()
+        except Exception:
+            pass
+        try:
+            dialog.theme_combo.currentTextChanged.disconnect()
+        except Exception:
+            pass
+
+        dialog.device_combo.blockSignals(True)
+        dialog.theme_combo.blockSignals(True)
+        dialog.include_notes_drag_cb.blockSignals(True)
+        dialog.ask_before_delete_cb.blockSignals(True)
+
+        dialog.apply_theme(self.current_theme)
         dialog.device_combo.clear()
         dialog.device_combo.addItem("System Default")
-        available_devices = self.devices_manager.audioOutputs()
         for device in available_devices:
             dialog.device_combo.addItem(device.description())
 
-        # Set current audio device selection
         current_device_index = dialog.device_combo.findText(self.audio_device_name)
         if current_device_index < 0:
             current_device_index = 0
         dialog.device_combo.setCurrentIndex(current_device_index)
+        dialog.theme_combo.setCurrentText(self.current_theme.title())
         dialog.include_notes_drag_cb.setChecked(self.include_notes_in_drag_drop)
         dialog.ask_before_delete_cb.setChecked(self.ask_before_delete)
 
         self.refresh_sounds_in_dialog(dialog, getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL))
-        dialog.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
-        dialog.recover_deleted_btn.clicked.connect(self.recover_deleted_voicemail)
-        dialog.open_tmetrics_folder_btn.clicked.connect(self.open_tmetrics_folder)
-        dialog.open_tmetrics_ringtones_btn.clicked.connect(self.open_tmetrics_ringtones_folder)
-        dialog.github_btn.clicked.connect(self.open_project_link)
-        dialog.test_sound_btn.clicked.connect(self.play_notification_sound)
-        dialog.info_btn.clicked.connect(self.show_feature_info)
-        dialog.theme_combo.setCurrentText(self.current_theme.title())
+
+        dialog.device_combo.blockSignals(False)
+        dialog.theme_combo.blockSignals(False)
+        dialog.include_notes_drag_cb.blockSignals(False)
+        dialog.ask_before_delete_cb.blockSignals(False)
+
         dialog.device_combo.currentIndexChanged.connect(
             lambda index, devices=available_devices: self.on_settings_audio_device_changed(index, devices)
         )
-        dialog.sound_combo.currentTextChanged.connect(self.on_settings_sound_changed)
-        dialog.include_notes_drag_cb.stateChanged.connect(self.on_include_notes_drag_changed)
-        dialog.ask_before_delete_cb.stateChanged.connect(self.on_ask_before_delete_changed)
         dialog.theme_combo.currentTextChanged.connect(
             lambda theme, dialog=dialog: self.on_settings_theme_changed(theme, dialog)
         )
 
-        self.settings_dialog = dialog
-        try:
-            dialog.exec()
-        finally:
-            self.settings_dialog = None
+    def show_settings(self):
+        self.populate_settings_view()
+        self.view_stack.setCurrentWidget(self.settings_view)
+
+    def show_main_view(self):
+        self.view_stack.setCurrentWidget(self.main_view)
 
     def peek_always_on_top_config(self):
         if CONFIG_FILE.exists():
@@ -976,11 +1011,11 @@ class VoicemailManager(QMainWindow):
         if SOUNDS_DIR.exists() and str(SOUNDS_DIR) not in self.sounds_watcher.directories():
             self.sounds_watcher.addPath(str(SOUNDS_DIR))
 
-        if self.settings_dialog and self.settings_dialog.isVisible():
-            dialog = self.settings_dialog
+        if self.settings_view and self.view_stack.currentWidget() == self.settings_view:
+            dialog = self.settings_view
             QTimer.singleShot(
                 200,
-                lambda dialog=dialog: self.refresh_sounds_in_dialog(dialog) if dialog.isVisible() else None
+                lambda dialog=dialog: self.refresh_sounds_in_dialog(dialog) if dialog is self.settings_view else None
             )
 
         self.load_selected_sound()
@@ -1161,6 +1196,20 @@ class VoicemailManager(QMainWindow):
 
         metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
 
+    def format_trash_time_remaining(self, deleted_at):
+        retention_seconds = TRASH_RETENTION_DAYS * 24 * 60 * 60
+        remaining_seconds = max(0, int((deleted_at + retention_seconds) - time.time()))
+
+        days, remainder = divmod(remaining_seconds, 24 * 60 * 60)
+        hours, remainder = divmod(remainder, 60 * 60)
+        minutes, _ = divmod(remainder, 60)
+
+        if days > 0:
+            return f"{days}d {hours}h left"
+        if hours > 0:
+            return f"{hours}h {minutes}m left"
+        return f"{minutes}m left"
+
     def confirm_delete_action(self, title, text, icon=QMessageBox.Icon.NoIcon, default_button=QMessageBox.StandardButton.No):
         if not self.ask_before_delete:
             return True
@@ -1219,70 +1268,96 @@ class VoicemailManager(QMainWindow):
 
         deleted_list = QListWidget()
         deleted_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        for entry in deleted_entries:
-            deleted_date = time.strftime("%m/%d/%y %I:%M %p", time.localtime(entry["deleted_at"]))
-            item = QListWidgetItem(f"{entry['filename']}   |   Deleted {deleted_date}")
-            item.setData(Qt.ItemDataRole.UserRole, str(entry["trash_dir"]))
-            item.setSizeHint(QSize(0, 38))
-            deleted_list.addItem(item)
-        deleted_list.setCurrentRow(0)
         layout.addWidget(deleted_list)
 
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        cancel_btn = QPushButton("Cancel")
+        close_btn = QPushButton("Close")
         restore_btn = QPushButton("Restore")
-        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(close_btn)
         button_layout.addWidget(restore_btn)
         layout.addLayout(button_layout)
 
-        cancel_btn.clicked.connect(dialog.reject)
-        restore_btn.clicked.connect(dialog.accept)
+        def refresh_deleted_list():
+            self.purge_expired_deleted_voicemails()
+            current_entries = self.get_deleted_voicemail_entries()
+            deleted_list.clear()
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+            for entry in current_entries:
+                time_remaining = self.format_trash_time_remaining(entry["deleted_at"])
+                item = QListWidgetItem(f"{entry['filename']}   |   {time_remaining}")
+                item.setData(Qt.ItemDataRole.UserRole, str(entry["trash_dir"]))
+                item.setSizeHint(QSize(0, 38))
+                deleted_list.addItem(item)
 
-        selected_item = deleted_list.currentItem()
-        if not selected_item:
-            return
+            has_entries = bool(current_entries)
+            restore_btn.setEnabled(has_entries)
+            if has_entries:
+                deleted_list.setCurrentRow(0)
+                info_label.setText(
+                    f"Deleted voicemails stay available for recovery for {TRASH_RETENTION_DAYS} days. "
+                    "Choose one below to restore it to the main list."
+                )
+            else:
+                info_label.setText("There are no deleted voicemails available to recover.")
 
-        selected_dir = Path(selected_item.data(Qt.ItemDataRole.UserRole))
-        selected_entry = next((entry for entry in deleted_entries if entry["trash_dir"] == selected_dir), None)
-        if not selected_entry:
-            return
+            return current_entries
 
-        restore_target = WORKSPACE_DIR / selected_entry["filename"]
-        if restore_target.exists():
-            QMessageBox.warning(self, "Recover Deleted", f"{selected_entry['filename']} already exists in the workspace.")
-            return
+        current_entries = refresh_deleted_list()
 
-        try:
-            shutil.move(str(selected_entry["voicemail_path"]), str(restore_target))
+        close_btn.clicked.connect(dialog.reject)
 
-            if selected_entry["has_note"]:
-                shutil.move(str(selected_entry["note_path"]), str(restore_target.with_suffix(".txt")))
+        def restore_selected_entry():
+            current_entries = refresh_deleted_list()
+            selected_item = deleted_list.currentItem()
+            if not selected_item:
+                return
 
-            if selected_entry["has_source"] and SOURCE_DIR.exists():
-                source_restore_target = SOURCE_DIR / selected_entry["filename"]
-                if not source_restore_target.exists():
-                    shutil.move(str(selected_entry["source_path"]), str(source_restore_target))
+            selected_dir = Path(selected_item.data(Qt.ItemDataRole.UserRole))
+            selected_entry = next((entry for entry in current_entries if entry["trash_dir"] == selected_dir), None)
+            if not selected_entry:
+                return
 
-            metadata = json.loads(selected_entry["metadata_path"].read_text(encoding="utf-8"))
-            if metadata.get("was_reviewed"):
-                self.reviewed_files.add(selected_entry["filename"])
-                self.save_reviewed_cache()
+            restore_target = WORKSPACE_DIR / selected_entry["filename"]
+            if restore_target.exists():
+                QMessageBox.warning(self, "Recover Deleted", f"{selected_entry['filename']} already exists in the workspace.")
+                refresh_deleted_list()
+                return
 
-            shutil.rmtree(selected_entry["trash_dir"], ignore_errors=True)
-            self.refresh_list()
+            try:
+                shutil.move(str(selected_entry["voicemail_path"]), str(restore_target))
 
-            for row in range(self.list_widget.count()):
-                row_item = self.list_widget.item(row)
-                if row_item and row_item.data(Qt.ItemDataRole.UserRole) == str(restore_target.absolute()):
-                    self.list_widget.setCurrentRow(row)
-                    self.on_item_selected()
-                    break
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Recovery failed: {e}")
+                if selected_entry["has_note"]:
+                    shutil.move(str(selected_entry["note_path"]), str(restore_target.with_suffix(".txt")))
+
+                if selected_entry["has_source"] and SOURCE_DIR.exists():
+                    source_restore_target = SOURCE_DIR / selected_entry["filename"]
+                    if not source_restore_target.exists():
+                        shutil.move(str(selected_entry["source_path"]), str(source_restore_target))
+
+                metadata = json.loads(selected_entry["metadata_path"].read_text(encoding="utf-8"))
+                if metadata.get("was_reviewed"):
+                    self.reviewed_files.add(selected_entry["filename"])
+                    self.save_reviewed_cache()
+
+                shutil.rmtree(selected_entry["trash_dir"], ignore_errors=True)
+                self.refresh_list()
+                remaining_entries = refresh_deleted_list()
+
+                for row in range(self.list_widget.count()):
+                    row_item = self.list_widget.item(row)
+                    if row_item and row_item.data(Qt.ItemDataRole.UserRole) == str(restore_target.absolute()):
+                        self.list_widget.setCurrentRow(row)
+                        self.on_item_selected()
+                        break
+
+                if remaining_entries:
+                    deleted_list.setCurrentRow(0)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Recovery failed: {e}")
+
+        restore_btn.clicked.connect(restore_selected_entry)
+        dialog.exec()
 
     def refresh_list(self):
         self.purge_expired_deleted_voicemails()
