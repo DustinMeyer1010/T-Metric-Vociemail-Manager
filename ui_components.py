@@ -2,7 +2,7 @@ import os
 import struct
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication, QHBoxLayout,
-                             QComboBox, QGroupBox)
+                             QComboBox, QStackedWidget)
 from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF
 from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen, QIcon, QPixmap, QPolygonF
 from constants import BASE_PATH, CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE
@@ -150,34 +150,60 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.theme = theme
         self.setWindowTitle("Settings")
-        self.resize(420, 380)
-        title_color, desc_color = self.apply_theme(theme)
+        self.resize(680, 500)
+        self.section_buttons = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
+        layout.setSpacing(12)
 
-        # Audio Settings Group
-        audio_group = QGroupBox("Audio Settings")
-        audio_group.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        audio_group.setStyleSheet(f"color: {title_color};")
-        audio_layout = QVBoxLayout(audio_group)
-        audio_layout.setSpacing(10)
+        header_title = QLabel("Settings")
+        header_title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        layout.addWidget(header_title)
 
-        # Audio Output
+        header_desc = QLabel("Everything is grouped here by task so the most-used settings are easier to find.")
+        header_desc.setWordWrap(True)
+        header_desc.setFont(QFont("Segoe UI", 9))
+        layout.addWidget(header_desc)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(14)
+        layout.addLayout(content_layout, stretch=1)
+
+        self.sidebar = QListWidget()
+        self.sidebar.setFixedWidth(180)
+        self.sidebar.setSpacing(4)
+        self.sidebar.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sidebar.currentRowChanged.connect(self.on_sidebar_changed)
+        content_layout.addWidget(self.sidebar)
+
+        self.pages = QStackedWidget()
+        content_layout.addWidget(self.pages, stretch=1)
+
+        audio_page = QWidget()
+        audio_layout = QVBoxLayout(audio_page)
+        audio_layout.setContentsMargins(0, 0, 0, 0)
+        audio_layout.setSpacing(12)
+
+        audio_title = QLabel("Audio")
+        audio_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        audio_layout.addWidget(audio_title)
+
+        audio_desc = QLabel("Choose where voicemail audio plays and which sound is used for notifications.")
+        audio_desc.setWordWrap(True)
+        audio_desc.setFont(QFont("Segoe UI", 9))
+        audio_layout.addWidget(audio_desc)
+
         device_label = QLabel("Audio Output:")
         device_label.setFont(QFont("Segoe UI", 9))
-        device_label.setStyleSheet(f"color: {desc_color};")
         audio_layout.addWidget(device_label)
 
         self.device_combo = QComboBox()
         self.device_combo.setFont(QFont("Segoe UI", 9))
         audio_layout.addWidget(self.device_combo)
 
-        # Notification Sound
         sound_label = QLabel("Notification Sound:")
         sound_label.setFont(QFont("Segoe UI", 9))
-        sound_label.setStyleSheet(f"color: {desc_color};")
         audio_layout.addWidget(sound_label)
 
         sound_combo_layout = QHBoxLayout()
@@ -209,42 +235,94 @@ class SettingsDialog(QDialog):
         sound_combo_layout.addWidget(self.open_sounds_folder_btn)
         audio_layout.addLayout(sound_combo_layout)
 
-        layout.addWidget(audio_group)
+        audio_layout.addStretch()
 
-        app_group = QGroupBox("Application")
-        app_group.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        app_group.setStyleSheet(f"color: {title_color};")
-        app_layout = QVBoxLayout(app_group)
-        app_layout.setSpacing(10)
+        appearance_page = QWidget()
+        appearance_layout = QVBoxLayout(appearance_page)
+        appearance_layout.setContentsMargins(0, 0, 0, 0)
+        appearance_layout.setSpacing(12)
+
+        appearance_title = QLabel("Appearance")
+        appearance_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        appearance_layout.addWidget(appearance_title)
+
+        appearance_desc = QLabel("Control how the manager looks while you work through voicemails.")
+        appearance_desc.setWordWrap(True)
+        appearance_desc.setFont(QFont("Segoe UI", 9))
+        appearance_layout.addWidget(appearance_desc)
 
         theme_label = QLabel("Theme:")
         theme_label.setFont(QFont("Segoe UI", 9))
-        theme_label.setStyleSheet(f"color: {desc_color};")
-        app_layout.addWidget(theme_label)
+        appearance_layout.addWidget(theme_label)
 
         self.theme_combo = QComboBox()
         self.theme_combo.setFont(QFont("Segoe UI", 9))
         self.theme_combo.addItems(["Dark", "Light"]) # Cartoon add to get cartoon theme
-        app_layout.addWidget(self.theme_combo)
+        appearance_layout.addWidget(self.theme_combo)
 
-        self.info_btn = QPushButton("Feature Information")
-        self.info_btn.setFont(QFont("Segoe UI", 9))
-        self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        app_layout.addWidget(self.info_btn)
+        appearance_layout.addStretch()
+
+        voicemail_page = QWidget()
+        voicemail_layout = QVBoxLayout(voicemail_page)
+        voicemail_layout.setContentsMargins(0, 0, 0, 0)
+        voicemail_layout.setSpacing(12)
+
+        voicemail_title = QLabel("Voicemail Management")
+        voicemail_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        voicemail_layout.addWidget(voicemail_title)
+
+        voicemail_desc = QLabel("Manage downloaded voicemail files, sounds, and recently deleted items.")
+        voicemail_desc.setWordWrap(True)
+        voicemail_desc.setFont(QFont("Segoe UI", 9))
+        voicemail_layout.addWidget(voicemail_desc)
+
+        self.recover_deleted_btn = QPushButton("Recover Deleted Voicemails")
+        self.recover_deleted_btn.setFont(QFont("Segoe UI", 9))
+        self.recover_deleted_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        voicemail_layout.addWidget(self.recover_deleted_btn)
 
         self.open_tmetrics_folder_btn = QPushButton("Open T-Metric Voicemail Folder")
         self.open_tmetrics_folder_btn.setFont(QFont("Segoe UI", 9))
         self.open_tmetrics_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        app_layout.addWidget(self.open_tmetrics_folder_btn)
+        voicemail_layout.addWidget(self.open_tmetrics_folder_btn)
+
+        voicemail_layout.addStretch()
+
+        help_page = QWidget()
+        help_layout = QVBoxLayout(help_page)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        help_layout.setSpacing(12)
+
+        help_title = QLabel("Help And Info")
+        help_title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        help_layout.addWidget(help_title)
+
+        help_desc = QLabel("Open the feature guide or jump to the project source.")
+        help_desc.setWordWrap(True)
+        help_desc.setFont(QFont("Segoe UI", 9))
+        help_layout.addWidget(help_desc)
+
+        self.info_btn = QPushButton("Feature Information")
+        self.info_btn.setFont(QFont("Segoe UI", 9))
+        self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        help_layout.addWidget(self.info_btn)
 
         self.github_btn = QPushButton("Source Code - GitHub")
         self.github_btn.setFont(QFont("Segoe UI", 9))
         self.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        app_layout.addWidget(self.github_btn)
+        help_layout.addWidget(self.github_btn)
 
-        layout.addWidget(app_group)
+        help_layout.addStretch()
 
-        # Buttons
+        self.pages.addWidget(audio_page)
+        self.pages.addWidget(appearance_page)
+        self.pages.addWidget(voicemail_page)
+        self.pages.addWidget(help_page)
+
+        for section in ["Audio", "Appearance", "Voicemail", "Help"]:
+            self.sidebar.addItem(section)
+        self.sidebar.setCurrentRow(0)
+
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
@@ -255,14 +333,15 @@ class SettingsDialog(QDialog):
         layout.addLayout(button_layout)
         self.apply_theme(theme)
 
+    def on_sidebar_changed(self, index):
+        if index >= 0:
+            self.pages.setCurrentIndex(index)
+
     def apply_theme(self, theme):
         self.theme = theme
         self.setStyleSheet(theme_stylesheet(theme))
 
         title_color, desc_color = theme_text_colors(theme)
-
-        for group_box in self.findChildren(QGroupBox):
-            group_box.setStyleSheet(f"color: {title_color};")
 
         for label in self.findChildren(QLabel):
             label.setStyleSheet(f"color: {desc_color};")
@@ -271,7 +350,33 @@ class SettingsDialog(QDialog):
             self.open_sounds_folder_btn.setIcon(folder_icon(theme))
         if hasattr(self, 'test_sound_btn'):
             self.test_sound_btn.setIcon(play_icon(theme))
+
+        if hasattr(self, 'sidebar'):
+            if theme == 'dark':
+                self.sidebar.setStyleSheet(
+                    "QListWidget { background-color: #263238; border: 1px solid #37474F; border-radius: 8px; padding: 6px; }"
+                    "QListWidget::item { color: #ECEFF1; padding: 10px 12px; border-radius: 6px; }"
+                    "QListWidget::item:selected { background-color: #009688; color: #FFFFFF; font-weight: 700; }"
+                    "QListWidget::item:hover:!selected { background-color: #314047; }"
+                )
+            elif theme == 'cartoon':
+                self.sidebar.setStyleSheet(
+                    "QListWidget { background-color: #FFFFFF; border: 2px solid #243B53; border-radius: 10px; padding: 6px; }"
+                    "QListWidget::item { color: #243B53; padding: 10px 12px; border-radius: 8px; }"
+                    "QListWidget::item:selected { background-color: #FFB703; color: #243B53; font-weight: 800; }"
+                    "QListWidget::item:hover:!selected { background-color: #FFE3A3; }"
+                )
+            else:
+                self.sidebar.setStyleSheet(
+                    "QListWidget { background-color: #F9FAFB; border: 1px solid #CBD5E1; border-radius: 8px; padding: 6px; }"
+                    "QListWidget::item { color: #1F2937; padding: 10px 12px; border-radius: 6px; }"
+                    "QListWidget::item:selected { background-color: #2563EB; color: #FFFFFF; font-weight: 700; }"
+                    "QListWidget::item:hover:!selected { background-color: #E5E7EB; }"
+                )
+
         action_buttons = []
+        if hasattr(self, 'recover_deleted_btn'):
+            action_buttons.append(self.recover_deleted_btn)
         if hasattr(self, 'info_btn'):
             action_buttons.append(self.info_btn)
         if hasattr(self, 'open_tmetrics_folder_btn'):

@@ -4,13 +4,14 @@ import sys
 import ctypes
 import struct
 import time
+import json
 import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
 from PyQt6.QtWidgets import (QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QCheckBox, QLineEdit, QComboBox, QTextEdit, QPushButton,
-                             QMessageBox, QInputDialog, QApplication, QListWidgetItem)
+                             QMessageBox, QInputDialog, QApplication, QListWidgetItem, QListWidget)
 from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices, QAudioDevice
 from PyQt6.QtCore import Qt, QUrl, QFileSystemWatcher, QTimer, QSize, QRegularExpression, QRectF
 from PyQt6.QtGui import (QIcon, QColor, QFont, QClipboard, QRegularExpressionValidator,
@@ -18,7 +19,7 @@ from PyQt6.QtGui import (QIcon, QColor, QFont, QClipboard, QRegularExpressionVal
 
 from constants import (BASE_PATH, SOURCE_DIR, ICON_PATH, WORKSPACE_DIR,
                        CACHE_FILE, CONFIG_FILE, CUSTOM_RESTORE_SOUND,
-                       SOUNDS_DIR, DEFAULT_SOUNDS_DIR, HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
+                       SOUNDS_DIR, DEFAULT_SOUNDS_DIR, TRASH_DIR, HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
                        CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE, SW_RESTORE,
                        DWMWA_USE_IMMERSIVE_DARK_MODE)
 from ui_components import InfoDialog, WaveformProgressBar, DraggableListWidget, SettingsDialog, play_icon, pause_icon
@@ -30,6 +31,7 @@ except ImportError:
 
 
 DEFAULT_SOUND_LABEL = "Default Sound"
+TRASH_RETENTION_DAYS = 30
 
 
 class VoicemailManager(QMainWindow):
@@ -159,7 +161,7 @@ class VoicemailManager(QMainWindow):
         playback_container_layout.setSpacing(6)
 
         time_layout = QHBoxLayout()
-        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label = QLabel("0:00 / 0:00")
         self.time_label.setFont(QFont("Segoe UI Semibold", 10))
         self.time_label.setStyleSheet("color: #00E5FF;")
         time_layout.addWidget(self.time_label)
@@ -311,6 +313,7 @@ class VoicemailManager(QMainWindow):
 
         self.refresh_sounds_in_dialog(dialog, getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL))
         dialog.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
+        dialog.recover_deleted_btn.clicked.connect(self.recover_deleted_voicemail)
         dialog.open_tmetrics_folder_btn.clicked.connect(self.open_tmetrics_folder)
         dialog.github_btn.clicked.connect(self.open_project_link)
         dialog.test_sound_btn.clicked.connect(self.play_notification_sound)
@@ -368,6 +371,7 @@ class VoicemailManager(QMainWindow):
         self.load_config()
         self.on_auto_close_changed()
         self.copy_default_sounds()
+        self.purge_expired_deleted_voicemails()
 
         self.watcher = QFileSystemWatcher()
         if SOURCE_DIR.exists():
@@ -449,11 +453,8 @@ class VoicemailManager(QMainWindow):
             self.phone_number_input.clear()
             self.phone_number_input.blockSignals(False)
 
-            self.time_label.setText("00:00 / 00:00")
-            self.timeline_slider.set_waveform(None)
-            self.timeline_slider.set_range(0)
+            self.reset_playback_panel()
             self.unreview_btn.setEnabled(False)
-            self.current_file_duration_ms = 0
             return
 
         if self.media_player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
@@ -499,7 +500,7 @@ class VoicemailManager(QMainWindow):
             tot_min = duration_seconds // 60
             tot_sec = duration_seconds % 60
 
-            self.time_label.setText(f"00:00 / {tot_min:02d}:{tot_sec:02d}")
+            self.time_label.setText(f"0:00 / {tot_min}:{tot_sec:02d}")
             self.timeline_slider.set_range(self.current_file_duration_ms)
             self.timeline_slider.set_value(0)
             self.timeline_slider.set_waveform(file_path_str)
@@ -833,7 +834,16 @@ class VoicemailManager(QMainWindow):
         tot_sec = total_ms // 1000
         tot_min = tot_sec // 60
         tot_sec = tot_sec % 60
-        self.time_label.setText(f"{cur_min:02d}:{cur_sec:02d} / {tot_min:02d}:{tot_sec:02d}")
+        self.time_label.setText(f"{cur_min}:{cur_sec:02d} / {tot_min}:{tot_sec:02d}")
+
+    def reset_playback_panel(self):
+        self.media_player.stop()
+        self.media_player.setSource(QUrl())
+        self.time_label.setText("0:00 / 0:00")
+        self.timeline_slider.set_waveform(None)
+        self.timeline_slider.set_range(0)
+        self.timeline_slider.set_value(0)
+        self.current_file_duration_ms = 0
 
     def change_audio_device(self, index):
         if index == 0:
@@ -1012,7 +1022,188 @@ class VoicemailManager(QMainWindow):
                     pass
         self.refresh_list()
 
+    def get_trash_item_paths(self, trash_item_dir):
+        metadata_path = trash_item_dir / "metadata.json"
+        voicemail_path = trash_item_dir / "workspace.wav"
+        note_path = trash_item_dir / "workspace.txt"
+        source_path = trash_item_dir / "source.wav"
+        return metadata_path, voicemail_path, note_path, source_path
+
+    def get_deleted_voicemail_entries(self):
+        entries = []
+        if not TRASH_DIR.exists():
+            return entries
+
+        for trash_item_dir in TRASH_DIR.iterdir():
+            if not trash_item_dir.is_dir():
+                continue
+
+            metadata_path, voicemail_path, note_path, source_path = self.get_trash_item_paths(trash_item_dir)
+            if not metadata_path.exists() or not voicemail_path.exists():
+                continue
+
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                deleted_at = float(metadata.get("deleted_at", 0))
+            except Exception:
+                continue
+
+            entries.append({
+                "trash_dir": trash_item_dir,
+                "metadata_path": metadata_path,
+                "voicemail_path": voicemail_path,
+                "note_path": note_path,
+                "source_path": source_path,
+                "filename": metadata.get("filename", voicemail_path.name),
+                "deleted_at": deleted_at,
+                "has_note": note_path.exists(),
+                "has_source": source_path.exists(),
+            })
+
+        entries.sort(key=lambda entry: entry["deleted_at"], reverse=True)
+        return entries
+
+    def purge_expired_deleted_voicemails(self):
+        now = time.time()
+        retention_seconds = TRASH_RETENTION_DAYS * 24 * 60 * 60
+
+        for entry in self.get_deleted_voicemail_entries():
+            deleted_at = entry.get("deleted_at", 0)
+            if deleted_at <= 0 or now - deleted_at < retention_seconds:
+                continue
+
+            try:
+                shutil.rmtree(entry["trash_dir"])
+            except Exception as e:
+                print(f"Error purging deleted voicemail {entry['trash_dir']}: {e}")
+
+    def move_voicemail_to_trash(self, ws_path):
+        deleted_at = time.time()
+        trash_item_dir = TRASH_DIR / f"{int(deleted_at * 1000)}_{ws_path.stem}"
+        trash_item_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata_path, voicemail_path, note_path, source_path = self.get_trash_item_paths(trash_item_dir)
+        metadata = {
+            "filename": ws_path.name,
+            "deleted_at": deleted_at,
+            "was_reviewed": ws_path.name in self.reviewed_files,
+        }
+
+        shutil.move(str(ws_path), str(voicemail_path))
+
+        ws_note_path = ws_path.with_suffix(".txt")
+        if ws_note_path.exists():
+            shutil.move(str(ws_note_path), str(note_path))
+
+        original_file_path = SOURCE_DIR / ws_path.name
+        if original_file_path.exists():
+            shutil.move(str(original_file_path), str(source_path))
+
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    def recover_deleted_voicemail(self):
+        self.purge_expired_deleted_voicemails()
+        deleted_entries = self.get_deleted_voicemail_entries()
+        if not deleted_entries:
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Recover Deleted")
+            msg_box.setText("There are no deleted voicemails available to recover.")
+            msg_box.setStyleSheet(self.current_style)
+            if msg_box.layout():
+                msg_box.layout().setContentsMargins(20, 20, 20, 20)
+            msg_box.exec()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Recover Deleted Voicemail")
+        dialog.resize(560, 420)
+        dialog.setStyleSheet(self.current_style)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+
+        title_label = QLabel("Recover Deleted Voicemail")
+        title_label.setFont(QFont("Segoe UI Semibold", 12))
+        layout.addWidget(title_label)
+
+        info_label = QLabel(
+            f"Deleted voicemails stay available for recovery for {TRASH_RETENTION_DAYS} days. "
+            "Choose one below to restore it to the main list."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        deleted_list = QListWidget()
+        deleted_list.setAlternatingRowColors(True)
+        deleted_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+        for entry in deleted_entries:
+            deleted_date = time.strftime("%m/%d/%y %I:%M %p", time.localtime(entry["deleted_at"]))
+            item = QListWidgetItem(f"{entry['filename']}   |   Deleted {deleted_date}")
+            item.setData(Qt.ItemDataRole.UserRole, str(entry["trash_dir"]))
+            item.setSizeHint(QSize(0, 38))
+            deleted_list.addItem(item)
+        deleted_list.setCurrentRow(0)
+        layout.addWidget(deleted_list)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        cancel_btn = QPushButton("Cancel")
+        restore_btn = QPushButton("Restore")
+        button_layout.addWidget(cancel_btn)
+        button_layout.addWidget(restore_btn)
+        layout.addLayout(button_layout)
+
+        cancel_btn.clicked.connect(dialog.reject)
+        restore_btn.clicked.connect(dialog.accept)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        selected_item = deleted_list.currentItem()
+        if not selected_item:
+            return
+
+        selected_dir = Path(selected_item.data(Qt.ItemDataRole.UserRole))
+        selected_entry = next((entry for entry in deleted_entries if entry["trash_dir"] == selected_dir), None)
+        if not selected_entry:
+            return
+
+        restore_target = WORKSPACE_DIR / selected_entry["filename"]
+        if restore_target.exists():
+            QMessageBox.warning(self, "Recover Deleted", f"{selected_entry['filename']} already exists in the workspace.")
+            return
+
+        try:
+            shutil.move(str(selected_entry["voicemail_path"]), str(restore_target))
+
+            if selected_entry["has_note"]:
+                shutil.move(str(selected_entry["note_path"]), str(restore_target.with_suffix(".txt")))
+
+            if selected_entry["has_source"] and SOURCE_DIR.exists():
+                source_restore_target = SOURCE_DIR / selected_entry["filename"]
+                if not source_restore_target.exists():
+                    shutil.move(str(selected_entry["source_path"]), str(source_restore_target))
+
+            metadata = json.loads(selected_entry["metadata_path"].read_text(encoding="utf-8"))
+            if metadata.get("was_reviewed"):
+                self.reviewed_files.add(selected_entry["filename"])
+                self.save_reviewed_cache()
+
+            shutil.rmtree(selected_entry["trash_dir"], ignore_errors=True)
+            self.refresh_list()
+
+            for row in range(self.list_widget.count()):
+                row_item = self.list_widget.item(row)
+                if row_item and row_item.data(Qt.ItemDataRole.UserRole) == str(restore_target.absolute()):
+                    self.list_widget.setCurrentRow(row)
+                    self.on_item_selected()
+                    break
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Recovery failed: {e}")
+
     def refresh_list(self):
+        self.purge_expired_deleted_voicemails()
         selected_path = None
         current_item = self.list_widget.currentItem()
         if current_item:
@@ -1082,6 +1273,8 @@ class VoicemailManager(QMainWindow):
             self.list_widget.setCurrentRow(target_row_to_select)
         else:
             if visible_count == 0:
+                self.list_widget.clearSelection()
+                self.on_item_selected()
                 self.unreview_btn.setEnabled(False)
 
     def prompt_rename(self):
@@ -1153,7 +1346,7 @@ class VoicemailManager(QMainWindow):
         ws_path = Path(item.data(Qt.ItemDataRole.UserRole))
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("Delete")
-        msg_box.setText(f"Delete {ws_path.name}?")
+        msg_box.setText(f"Delete {ws_path.name}?\n\nYou can recover it for up to {TRASH_RETENTION_DAYS} days.")
         msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setStyleSheet(self.current_style)
         if msg_box.layout():
@@ -1164,21 +1357,8 @@ class VoicemailManager(QMainWindow):
                 self.reviewed_files.discard(ws_path.name)
                 self.save_reviewed_cache()
 
-            note_path = ws_path.with_suffix(".txt")
-            if note_path.exists():
-                try:
-                    os.remove(note_path)
-                except OSError:
-                    pass
-
-            original_file_path = SOURCE_DIR / ws_path.name
-            if original_file_path.exists():
-                try:
-                    os.remove(original_file_path)
-                except OSError:
-                    pass
             try:
-                os.remove(ws_path)
+                self.move_voicemail_to_trash(ws_path)
                 self.refresh_list()
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Delete failed: {e}")
@@ -1186,7 +1366,7 @@ class VoicemailManager(QMainWindow):
     def delete_all_files(self):
         self.media_player.stop()
         self.media_player.setSource(QUrl())
-        file_count = self.list_widget.count()
+        file_count = len(list(WORKSPACE_DIR.glob("*.wav"))) if WORKSPACE_DIR.exists() else 0
         if file_count == 0:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Delete All")
@@ -1199,7 +1379,10 @@ class VoicemailManager(QMainWindow):
 
         confirm_box = QMessageBox(self)
         confirm_box.setWindowTitle("Confirm Delete All")
-        confirm_box.setText(f"Are you absolutely sure you want to permanently delete ALL {file_count} voicemails?\n\nThis will wipe them from your Workspace (including text notes) and T-Metrics folders.")
+        confirm_box.setText(
+            f"Delete ALL {file_count} voicemails?\n\n"
+            f"They will be recoverable for {TRASH_RETENTION_DAYS} days before permanent deletion."
+        )
         confirm_box.setIcon(QMessageBox.Icon.Warning)
         confirm_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         confirm_box.setDefaultButton(QMessageBox.StandardButton.No)
@@ -1213,25 +1396,17 @@ class VoicemailManager(QMainWindow):
             if WORKSPACE_DIR.exists():
                 for f in WORKSPACE_DIR.glob("*.wav"):
                     try:
-                        os.remove(f)
-                    except Exception:
-                        pass
-                for f in WORKSPACE_DIR.glob("*.txt"):
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
-            if SOURCE_DIR.exists():
-                for f in SOURCE_DIR.glob("*.wav"):
-                    try:
-                        os.remove(f)
+                        self.move_voicemail_to_trash(f)
                     except Exception:
                         pass
             self.refresh_list()
 
             success_box = QMessageBox(self)
             success_box.setWindowTitle("Success")
-            success_box.setText("All voicemails and associated notes have been successfully deleted.")
+            success_box.setText(
+                f"All voicemails were moved to Deleted Voicemails.\n\n"
+                f"They can be recovered for {TRASH_RETENTION_DAYS} days."
+            )
             success_box.setStyleSheet(self.current_style)
             if success_box.layout():
                 success_box.layout().setContentsMargins(20, 20, 20, 20)

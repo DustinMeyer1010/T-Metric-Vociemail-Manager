@@ -9,6 +9,7 @@ ICON_PATH = "URMC.ico"
 CACHE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "VoicemailManager"
 WORKSPACE_DIR = CACHE_DIR / "Voicemail_Workspace"
 SOUNDS_DIR = CACHE_DIR / "Voicemail_Sounds"
+TRASH_DIR = CACHE_DIR / "Deleted_Voicemails"
 
 # Handle both frozen and non-frozen environments
 if getattr(sys, 'frozen', False):
@@ -23,6 +24,7 @@ CONFIG_FILE = CACHE_DIR / "config.txt"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
+TRASH_DIR.mkdir(parents=True, exist_ok=True)
 
 HWND_TOPMOST = -1
 SW_RESTORE = 9

@@ -51,8 +51,8 @@ The bottom buttons handle common voicemail actions:
 
 - `Rename`: rename the selected voicemail.
 - `Mark Unreviewed`: remove the reviewed status.
-- `Delete`: delete the selected voicemail.
-- `Delete All`: clear all visible workspace voicemails.
+- `Delete`: move the selected voicemail to deleted storage for up to 30 days.
+- `Delete All`: move all workspace voicemails to deleted storage for up to 30 days.
 
 ## Settings
 
@@ -67,6 +67,7 @@ Available settings:
 - Play button beside notification sound: preview the selected notification sound.
 - Folder button beside notification sound: open the custom notification sounds folder.
 - `Theme`: choose dark, light, or cartoon mode.
+- `Recover Deleted Voicemails`: restore a voicemail that was deleted within the last 30 days.
 - `Feature Information`: open the in-app feature guide.
 - `Open T-Metric Voicemail Folder`: open the original T-Metrics download folder.
 
