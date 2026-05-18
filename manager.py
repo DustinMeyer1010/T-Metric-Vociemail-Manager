@@ -35,6 +35,7 @@ DEFAULT_SOUND_LABEL = "Default Sound"
 class VoicemailManager(QMainWindow):
     def __init__(self, app):
         super().__init__()
+        
         self.app = app
         self.current_theme = 'dark'
         self.current_style = DARK_THEME_STYLE
@@ -62,6 +63,7 @@ class VoicemailManager(QMainWindow):
         self.devices_manager.audioOutputsChanged.connect(self.apply_saved_audio_device)
         self.settings_dialog = None
         self.loading_config = False
+        self.tmetrics_popup_detected = False
 
         self.reviewed_files = set()
         self.current_file_duration_ms = 0
@@ -388,7 +390,7 @@ class VoicemailManager(QMainWindow):
 
         self.window_pin_timer = QTimer(self)
         self.window_pin_timer.timeout.connect(self.ensure_tmetrics_popup_on_top)
-        self.window_pin_timer.start(1000)
+        self.window_pin_timer.start(500)
 
         # Set title bar theme based on loaded config
         self.set_title_bar_theme(dark_mode=(self.current_theme == 'dark'))
@@ -550,36 +552,102 @@ class VoicemailManager(QMainWindow):
         QTimer.singleShot(1500, lambda: self.status_label.setText(original_text))
 
     def ensure_tmetrics_popup_on_top(self):
+        """
+        Detect the T-Metrics Customer Message Information popup.
 
-        manager_hwnd = int(self.winId())
-        if manager_hwnd:
-            if ctypes.windll.user32.GetForegroundWindow() != manager_hwnd:
-                ctypes.windll.user32.SetWindowPos(manager_hwnd, HWND_TOPMOST, 0, 0, 0, 0, TOPMOST_FLAGS)
+        Behavior:
+        - Keeps the Customer Message Information window always on top.
+        - Restores it if minimized.
+        - Restores/unminimizes this Voicemail Manager app on first detection.
+        - Plays the selected notification sound once when the popup is first found.
+        - Does not repeat the sound while the same popup remains open.
+        - Resets after the popup closes so the sound plays again next time.
+        """
+        try:
+            manager_hwnd = int(self.winId())
 
-        target_phrases = ["Customer Message Information", "Message Information", "Customer Message"]
+            # Keep this Voicemail Manager window topmost as well.
+            # This matches your existing behavior of keeping the manager visible.
+            if manager_hwnd:
+                ctypes.windll.user32.SetWindowPos(
+                    manager_hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    TOPMOST_FLAGS
+                )
 
-        def scan_windows_callback(hwnd, extra):
-            if not ctypes.windll.user32.IsWindowVisible(hwnd):
+            target_phrases = [
+                "Customer Message Information",
+                "Message Information",
+                "Customer Message"
+            ]
+
+            popup_found = {"value": False}
+
+            def scan_windows_callback(hwnd, extra):
+                if not ctypes.windll.user32.IsWindowVisible(hwnd):
+                    return True
+
+                length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+                window_title = ""
+
+                if length > 0:
+                    buffer = ctypes.create_unicode_buffer(length + 1)
+                    ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
+                    window_title = buffer.value
+
+                is_target_window = any(
+                    phrase.lower() in window_title.lower()
+                    for phrase in target_phrases
+                )
+
+                if is_target_window:
+                    popup_found["value"] = True
+
+                    # Restore the T-Metrics Customer Message window if minimized
+                    if ctypes.windll.user32.IsIconic(hwnd):
+                        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
+
+                    # Force the Customer Message Information window to stay always on top
+                    ctypes.windll.user32.SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        TOPMOST_FLAGS
+                    )
+
+                    # Stop scanning once we find the target popup
+                    return False
+
                 return True
 
-            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-            window_title = ""
-            if length > 0:
-                buffer = ctypes.create_unicode_buffer(length + 1)
-                ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-                window_title = buffer.value
+            ctypes.windll.user32.EnumWindows(
+                EnumWindowsProc(scan_windows_callback),
+                0
+            )
 
-            is_target_window = any(phrase.lower() in window_title.lower() for phrase in target_phrases)
-            if is_target_window:
-                if ctypes.windll.user32.IsIconic(hwnd):
-                    ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
-                    self.play_notification_sound()
+            # First time the popup is detected
+            if popup_found["value"] and not self.tmetrics_popup_detected:
+                self.tmetrics_popup_detected = True
 
-                foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
-                if foreground_hwnd != hwnd:
-                    ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, TOPMOST_FLAGS)
-                return False
-            return True
+                # Restore/unminimize the Voicemail Manager app
+                self.restore_manager_window()
+
+                # Play selected notification sound once
+                self.play_notification_sound()
+
+            # Reset after the popup is closed/no longer found
+            elif not popup_found["value"] and self.tmetrics_popup_detected:
+                self.tmetrics_popup_detected = False
+
+        except Exception as e:
+            print(f"Error ensuring T-Metrics popup on top: {e}")
 
         ctypes.windll.user32.EnumWindows(EnumWindowsProc(scan_windows_callback), 0)
 
@@ -875,6 +943,7 @@ class VoicemailManager(QMainWindow):
         else:
             self.selected_sound_file = None
 
+
     def play_notification_sound(self):
         """Play the selected notification sound"""
         if self.selected_sound_file and self.selected_sound_file.exists():
@@ -899,6 +968,34 @@ class VoicemailManager(QMainWindow):
         if SOURCE_DIR.exists():
             self.auto_close_folder_cb.setChecked(False)
             os.startfile(SOURCE_DIR)
+
+
+    def restore_manager_window(self):
+        """Restore and show the Voicemail Manager window when a T-Metrics popup is detected."""
+        try:
+            if self.isMinimized():
+                self.showNormal()
+
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+            manager_hwnd = int(self.winId())
+            if manager_hwnd:
+                ctypes.windll.user32.ShowWindow(manager_hwnd, SW_RESTORE)
+                ctypes.windll.user32.SetWindowPos(
+                    manager_hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    TOPMOST_FLAGS
+                )
+
+        except Exception as e:
+            print(f"Error restoring manager window: {e}")
+
 
     def open_project_link(self):
         webbrowser.open('https://github.com/DustinMeyer1010/T-Metric-Vociemail-Manager')
