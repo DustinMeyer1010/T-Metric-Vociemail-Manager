@@ -39,6 +39,12 @@ App workspace for copied voicemail files and notes.
 
 Notification sound folder. Add `.wav`, `.mp3`, `.flac`, or `.ogg` files here and they will appear in Settings.
 
+```text
+%APPDATA%\T-Metrics, Inc\VoicemailManager\voicemail_manager.log
+```
+
+Application log file. It records startup activity, settings changes, file actions, debugging details, and unexpected errors.
+
 ## Using The App
 
 Run the app and leave it open while T-Metrics is downloading voicemails.
@@ -72,6 +78,7 @@ Available settings:
 - `Include .txt Note In Drag And Drop`: when enabled, dragging a voicemail also includes its note file.
 - `Ask Before Deleting Voicemails`: controls whether delete actions show a confirmation prompt each time.
 - `Open T-Metric Ringtones Folder`: open `%APPDATA%\T-Metrics, Inc\SIP Softphone\Ringtones` so `.wav` ringtone files can be added.
+- `View Application Logs`: open a live-updating log viewer window while continuing to use the app.
 - `Feature Information`: open the in-app feature guide.
 - `Open T-Metric Voicemail Folder`: open the original T-Metrics download folder.
 

@@ -9,6 +9,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import unquote
 
+from app_logger import get_logger
 from PyQt6.QtWidgets import (QDialog, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                              QCheckBox, QLineEdit, QComboBox, QTextEdit, QPushButton,
                              QMessageBox, QInputDialog, QApplication, QListWidgetItem, QListWidget, QStackedWidget)
@@ -22,7 +23,7 @@ from constants import (BASE_PATH, SOURCE_DIR, ICON_PATH, WORKSPACE_DIR,
                        SOUNDS_DIR, DEFAULT_SOUNDS_DIR, TRASH_DIR, TMETRIC_RINGTONES_DIR, HWND_TOPMOST, TOPMOST_FLAGS, EnumWindowsProc,
                        CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE, SW_RESTORE,
                        DWMWA_USE_IMMERSIVE_DARK_MODE)
-from ui_components import InfoDialog, WaveformProgressBar, DraggableListWidget, SettingsDialog, play_icon, pause_icon
+from ui_components import InfoDialog, LogViewerDialog, WaveformProgressBar, DraggableListWidget, SettingsDialog, play_icon, pause_icon
 
 try:
     import win32com.client
@@ -32,6 +33,7 @@ except ImportError:
 
 DEFAULT_SOUND_LABEL = "Default Sound"
 TRASH_RETENTION_DAYS = 30
+logger = get_logger("manager")
 
 
 class VoicemailManager(QMainWindow):
@@ -72,6 +74,7 @@ class VoicemailManager(QMainWindow):
         self.known_workspace_signatures = set()
         self.include_notes_in_drag_drop = False
         self.ask_before_delete = True
+        self.log_viewer_dialog = None
 
         self.view_stack = QStackedWidget()
         self.setCentralWidget(self.view_stack)
@@ -301,14 +304,35 @@ class VoicemailManager(QMainWindow):
 
         if self.settings_view is not None:
             self.settings_view.apply_theme(self.current_theme)
+        if self.log_viewer_dialog is not None:
+            self.log_viewer_dialog.apply_theme(self.current_theme)
+        logger.info("Theme applied: %s", self.current_theme)
 
     def toggle_theme(self):
         next_theme = 'light' if self.current_theme == 'dark' else 'cartoon' if self.current_theme == 'light' else 'dark'
         self.apply_theme(next_theme)
 
     def show_feature_info(self):
+        logger.info("Opening feature information dialog")
         dialog = InfoDialog(self.current_theme, self)
         dialog.exec()
+
+    def show_log_viewer(self):
+        if self.log_viewer_dialog is None:
+            self.log_viewer_dialog = LogViewerDialog(self.current_theme, self)
+            self.log_viewer_dialog.finished.connect(self.on_log_viewer_closed)
+        else:
+            self.log_viewer_dialog.apply_theme(self.current_theme)
+            self.log_viewer_dialog.refresh_log_contents()
+
+        self.log_viewer_dialog.show()
+        self.log_viewer_dialog.raise_()
+        self.log_viewer_dialog.activateWindow()
+        logger.info("Opened application log viewer")
+
+    def on_log_viewer_closed(self, _result):
+        logger.info("Closed application log viewer")
+        self.log_viewer_dialog = None
 
     def initialize_settings_view(self):
         self.settings_view.open_sounds_folder_btn.clicked.connect(self.open_sounds_folder)
@@ -318,6 +342,7 @@ class VoicemailManager(QMainWindow):
         self.settings_view.github_btn.clicked.connect(self.open_project_link)
         self.settings_view.test_sound_btn.clicked.connect(self.play_notification_sound)
         self.settings_view.info_btn.clicked.connect(self.show_feature_info)
+        self.settings_view.view_logs_btn.clicked.connect(self.show_log_viewer)
         self.settings_view.sound_combo.currentTextChanged.connect(self.on_settings_sound_changed)
         self.settings_view.include_notes_drag_cb.stateChanged.connect(self.on_include_notes_drag_changed)
         self.settings_view.ask_before_delete_cb.stateChanged.connect(self.on_ask_before_delete_changed)
@@ -372,9 +397,11 @@ class VoicemailManager(QMainWindow):
     def show_settings(self):
         self.populate_settings_view()
         self.view_stack.setCurrentWidget(self.settings_view)
+        logger.info("Switched to settings view")
 
     def show_main_view(self):
         self.view_stack.setCurrentWidget(self.main_view)
+        logger.info("Returned to main view")
 
     def peek_always_on_top_config(self):
         if CONFIG_FILE.exists():
@@ -390,12 +417,7 @@ class VoicemailManager(QMainWindow):
     def set_title_bar_theme(self, dark_mode=True):
         """Set the Windows title bar theme (dark/light)"""
         try:
-            # Get the window handle
             hwnd = int(self.winId())
-            print(f"Setting title bar theme - hwnd: {hwnd}, dark_mode: {dark_mode}, DWMWA_USE_IMMERSIVE_DARK_MODE: {DWMWA_USE_IMMERSIVE_DARK_MODE}")
-            
-            # Set the DWM attribute for immersive dark mode
-            # 0 = light title bar, 1 = dark title bar
             value = ctypes.c_int(1 if dark_mode else 0)
             result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd,
@@ -403,13 +425,13 @@ class VoicemailManager(QMainWindow):
                 ctypes.byref(value),
                 ctypes.sizeof(value)
             )
-            print(f"DwmSetWindowAttribute result: {result}")
+            logger.debug("Set title bar theme. hwnd=%s dark_mode=%s result=%s", hwnd, dark_mode, result)
         except Exception as e:
-            print(f"Error setting title bar theme: {e}")
-            # Silently fail if DWM is not available or other error
+            logger.exception("Error setting title bar theme: %s", e)
             pass
 
     def bootstrap_application(self):
+        logger.info("Bootstrapping application state")
         self.reviewed_files = self.load_reviewed_cache()
         self.load_config()
         self.on_auto_close_changed()
@@ -441,6 +463,7 @@ class VoicemailManager(QMainWindow):
 
         # Set title bar theme based on loaded config
         self.set_title_bar_theme(dark_mode=(self.current_theme == 'dark'))
+        logger.info("Bootstrap completed")
 
     def copy_default_sounds(self):
         """Copy default sounds to the AppData sounds directory if they don't already exist"""
@@ -465,7 +488,7 @@ class VoicemailManager(QMainWindow):
                     try:
                         shutil.copy2(source_file, target_file)
                     except Exception as e:
-                        print(f"Error copying default sound {sound_file}: {e}")
+                        logger.exception("Error copying default sound %s: %s", sound_file, e)
 
     def handle_directory_changed_with_delay(self):
         QTimer.singleShot(300, self.sync_from_source)
@@ -481,7 +504,7 @@ class VoicemailManager(QMainWindow):
                 if byte_rate > 0 and data_size > 0:
                     return int(data_size / byte_rate)
         except Exception as e:
-            print(f"Error parsing metadata header: {e}")
+            logger.exception("Error parsing metadata header: %s", e)
         return 0
 
     def on_item_selected(self):
@@ -498,6 +521,7 @@ class VoicemailManager(QMainWindow):
 
             self.reset_playback_panel()
             self.unreview_btn.setEnabled(False)
+            logger.debug("Cleared voicemail selection")
             return
 
         if self.media_player.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
@@ -522,7 +546,7 @@ class VoicemailManager(QMainWindow):
                     self.phone_number_input.setText(phone)
                     self.notes_box.setPlainText(notes_content)
                 except Exception as e:
-                    print(f"Error loading text notes: {e}")
+                    logger.exception("Error loading text notes for %s: %s", note_file_path, e)
         else:
             self.notes_box.setEnabled(False)
         self.notes_box.blockSignals(False)
@@ -531,6 +555,7 @@ class VoicemailManager(QMainWindow):
         if file_path_str:
             filename = Path(file_path_str).name
             self.unreview_btn.setEnabled(filename in self.reviewed_files)
+            logger.debug("Selected voicemail: %s", filename)
 
         if file_path_str and os.path.exists(file_path_str):
             duration_seconds = self.get_wav_duration(file_path_str)
@@ -563,7 +588,7 @@ class VoicemailManager(QMainWindow):
                     with open(note_file_path, "w", encoding="utf-8") as nf:
                         nf.write(combined_content)
             except Exception as e:
-                print(f"Error auto-saving workspace note: {e}")
+                logger.exception("Error auto-saving workspace note for %s: %s", note_file_path, e)
 
     def copy_phone_number(self):
         raw_number = self.phone_number_input.text().strip()
@@ -582,6 +607,7 @@ class VoicemailManager(QMainWindow):
         if copy_value:
             QApplication.clipboard().setText(copy_value, QClipboard.Mode.Clipboard)
             self.status_label.setText(f"Copied phone number: {copy_value}")
+            logger.info("Copied phone number to clipboard")
         else:
             self.status_label.setText("Enter a valid phone number to copy.")
 
@@ -591,9 +617,6 @@ class VoicemailManager(QMainWindow):
         if ctypes.windll.user32.IsIconic(hwnd):
             ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
 
-        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
-        ctypes.windll.user32.BringWindowToTop(hwnd)
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
         ctypes.windll.user32.SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -671,6 +694,7 @@ class VoicemailManager(QMainWindow):
             # First time the popup is detected
             if popup_found["value"] and not self.tmetrics_popup_detected:
                 self.tmetrics_popup_detected = True
+                logger.info("T-Metrics popup detected")
 
                 # Restore/unminimize the Voicemail Manager app
                 self.restore_manager_window()
@@ -681,9 +705,10 @@ class VoicemailManager(QMainWindow):
             # Reset after the popup is closed/no longer found
             elif not popup_found["value"] and self.tmetrics_popup_detected:
                 self.tmetrics_popup_detected = False
+                logger.info("T-Metrics popup no longer detected")
 
         except Exception as e:
-            print(f"Error ensuring T-Metrics popup on top: {e}")
+            logger.exception("Error ensuring T-Metrics popup on top: %s", e)
 
     def load_reviewed_cache(self):
         if CACHE_FILE.exists():
@@ -691,7 +716,7 @@ class VoicemailManager(QMainWindow):
                 with open(CACHE_FILE, "r", encoding="utf-8") as f:
                     return {line.strip() for line in f if line.strip()}
             except Exception as e:
-                print(f"Error loading cache: {e}")
+                logger.exception("Error loading reviewed cache: %s", e)
         return set()
 
     def save_reviewed_cache(self):
@@ -700,7 +725,7 @@ class VoicemailManager(QMainWindow):
                 for filename in sorted(self.reviewed_files):
                     f.write(f"{filename}\n")
         except Exception as e:
-            print(f"Error saving cache: {e}")
+            logger.exception("Error saving reviewed cache: %s", e)
 
     def load_config(self):
         if CONFIG_FILE.exists():
@@ -739,7 +764,7 @@ class VoicemailManager(QMainWindow):
                     self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
                     self.ask_before_delete = lines[7].strip() != "False" if len(lines) > 7 else True
             except Exception as e:
-                print(f"Error loading config: {e}")
+                logger.exception("Error loading config: %s", e)
             finally:
                 self.loading_config = False
 
@@ -758,13 +783,15 @@ class VoicemailManager(QMainWindow):
                 f.write(f"{getattr(self, 'include_notes_in_drag_drop', False)}\n")
                 f.write(f"{getattr(self, 'ask_before_delete', True)}\n")
         except Exception as e:
-            print(f"Error saving config: {e}")
+            logger.exception("Error saving config: %s", e)
 
     def on_hide_reviewed_changed(self):
+        logger.info("Hide reviewed set to: %s", self.hide_reviewed_cb.isChecked())
         self.save_config()
         self.refresh_list()
 
     def on_always_on_top_changed(self):
+        logger.info("Always on top set to: %s", self.always_on_top_cb.isChecked())
         self.save_config()
         flags = self.windowFlags()
         if self.always_on_top_cb.isChecked():
@@ -775,6 +802,7 @@ class VoicemailManager(QMainWindow):
         self.show()
 
     def on_auto_close_changed(self):
+        logger.info("Auto-close folder set to: %s", self.auto_close_folder_cb.isChecked())
         self.save_config()
         if self.auto_close_folder_cb.isChecked():
             self.explorer_check_timer.start(500)
@@ -784,10 +812,12 @@ class VoicemailManager(QMainWindow):
     def on_include_notes_drag_changed(self, state):
         self.include_notes_in_drag_drop = bool(state)
         self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
+        logger.info("Include note in drag and drop set to: %s", self.include_notes_in_drag_drop)
         self.save_config()
 
     def on_ask_before_delete_changed(self, state):
         self.ask_before_delete = bool(state)
+        logger.info("Ask before delete set to: %s", self.ask_before_delete)
         self.save_config()
 
     def close_explorer_at_location(self):
@@ -807,14 +837,17 @@ class VoicemailManager(QMainWindow):
                         if unquoted_path == target_path:
                             window.Quit()
         except Exception as e:
-            print(f"Real-time folder tracking layer error: {e}")
+            logger.exception("Real-time folder tracking layer error: %s", e)
 
     def play_audio(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
+            logger.info("Paused audio playback")
             return
         elif self.media_player.playbackState() == QMediaPlayer.PlaybackState.PausedState:
             self.media_player.play()
+            source_url = self.media_player.source().toLocalFile()
+            logger.info("Resumed audio playback for %s", Path(source_url).name if source_url else "unknown")
             return
 
         item = self.list_widget.currentItem()
@@ -832,6 +865,7 @@ class VoicemailManager(QMainWindow):
             if self.media_player.source().isEmpty() or self.media_player.playbackState() == QMediaPlayer.PlaybackState.StoppedState:
                 self.media_player.setSource(QUrl.fromLocalFile(file_path_str))
             self.media_player.play()
+            logger.info("Started audio playback for %s", filename)
 
     def update_playback_button_icon(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
@@ -845,6 +879,7 @@ class VoicemailManager(QMainWindow):
     def mark_as_unreviewed(self):
         item = self.list_widget.currentItem()
         if not item:
+            logger.info("Mark unreviewed requested with no selected voicemail")
             return
 
         file_path_str = item.data(Qt.ItemDataRole.UserRole)
@@ -857,6 +892,9 @@ class VoicemailManager(QMainWindow):
                 self.save_reviewed_cache()
                 self.refresh_list()
                 self.unreview_btn.setEnabled(False)
+                logger.info("Marked voicemail as unreviewed: %s", filename)
+            else:
+                logger.info("Mark unreviewed requested for already unreviewed voicemail: %s", filename)
 
     def update_slider_duration(self, duration_ms):
         if duration_ms > 0:
@@ -971,11 +1009,13 @@ class VoicemailManager(QMainWindow):
             self.apply_audio_device("System Default", available_devices)
         elif index <= len(available_devices):
             self.apply_audio_device(available_devices[index - 1].description(), available_devices)
+        logger.info("Audio device setting changed to: %s", self.audio_device_name)
         self.save_config()
 
     def on_settings_sound_changed(self, selected_sound):
         self.sound_combo_current_text = selected_sound or DEFAULT_SOUND_LABEL
         self.load_selected_sound()
+        logger.info("Notification sound changed to: %s", self.sound_combo_current_text)
         self.save_config()
 
     def on_settings_theme_changed(self, theme, dialog):
@@ -1023,6 +1063,7 @@ class VoicemailManager(QMainWindow):
     def open_sounds_folder(self):
         SOUNDS_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(SOUNDS_DIR)
+        logger.info("Opened notification sounds folder: %s", SOUNDS_DIR)
 
     def load_selected_sound(self):
         """Load the selected sound file"""
@@ -1052,8 +1093,9 @@ class VoicemailManager(QMainWindow):
                 self.notification_player.stop()
                 self.notification_player.setSource(QUrl.fromLocalFile(str(self.selected_sound_file)))
                 self.notification_player.play()
+                logger.info("Played notification sound: %s", self.selected_sound_file.name)
             except Exception as e:
-                print(f"Error playing notification sound: {e}")
+                logger.exception("Error playing notification sound: %s", e)
                 try:
                     ctypes.windll.user32.MessageBeep(0x00000030)
                 except Exception:
@@ -1069,10 +1111,12 @@ class VoicemailManager(QMainWindow):
         if SOURCE_DIR.exists():
             self.auto_close_folder_cb.setChecked(False)
             os.startfile(SOURCE_DIR)
+            logger.info("Opened T-Metrics voicemail folder: %s", SOURCE_DIR)
 
     def open_tmetrics_ringtones_folder(self):
         TMETRIC_RINGTONES_DIR.mkdir(parents=True, exist_ok=True)
         os.startfile(TMETRIC_RINGTONES_DIR)
+        logger.info("Opened T-Metrics ringtones folder: %s", TMETRIC_RINGTONES_DIR)
 
 
     def restore_manager_window(self):
@@ -1099,10 +1143,11 @@ class VoicemailManager(QMainWindow):
                 )
 
         except Exception as e:
-            print(f"Error restoring manager window: {e}")
+            logger.exception("Error restoring manager window: %s", e)
 
 
     def open_project_link(self):
+        logger.info("Opened project GitHub link")
         webbrowser.open('https://github.com/DustinMeyer1010/T-Metric-Vociemail-Manager')
 
     def sync_from_source(self):
@@ -1113,6 +1158,7 @@ class VoicemailManager(QMainWindow):
             if f.suffix.lower() == '.wav' and f.name not in existing_in_workspace:
                 try:
                     shutil.copy2(f, WORKSPACE_DIR / f.name)
+                    logger.info("Imported voicemail into workspace: %s", f.name)
                 except Exception:
                     pass
         self.refresh_list()
@@ -1170,7 +1216,7 @@ class VoicemailManager(QMainWindow):
             try:
                 shutil.rmtree(entry["trash_dir"])
             except Exception as e:
-                print(f"Error purging deleted voicemail {entry['trash_dir']}: {e}")
+                logger.exception("Error purging deleted voicemail %s: %s", entry["trash_dir"], e)
 
     def move_voicemail_to_trash(self, ws_path):
         deleted_at = time.time()
@@ -1230,10 +1276,12 @@ class VoicemailManager(QMainWindow):
 
         confirmed = msg_box.exec() == QMessageBox.StandardButton.Yes
         self.ask_before_delete = ask_checkbox.isChecked()
+        logger.info("Delete confirmation responded=%s ask_before_delete=%s", confirmed, self.ask_before_delete)
         self.save_config()
         return confirmed
 
     def recover_deleted_voicemail(self):
+        logger.info("Opened recover deleted voicemail dialog")
         self.purge_expired_deleted_voicemails()
         deleted_entries = self.get_deleted_voicemail_entries()
         if not deleted_entries:
@@ -1244,6 +1292,7 @@ class VoicemailManager(QMainWindow):
             if msg_box.layout():
                 msg_box.layout().setContentsMargins(20, 20, 20, 20)
             msg_box.exec()
+            logger.info("Recover deleted requested but no deleted voicemails were available")
             return
 
         dialog = QDialog(self)
@@ -1305,12 +1354,17 @@ class VoicemailManager(QMainWindow):
 
         current_entries = refresh_deleted_list()
 
-        close_btn.clicked.connect(dialog.reject)
+        def close_recovery_dialog():
+            logger.info("Closed recover deleted voicemail dialog")
+            dialog.reject()
+
+        close_btn.clicked.connect(close_recovery_dialog)
 
         def restore_selected_entry():
             current_entries = refresh_deleted_list()
             selected_item = deleted_list.currentItem()
             if not selected_item:
+                logger.info("Restore requested with no deleted voicemail selected")
                 return
 
             selected_dir = Path(selected_item.data(Qt.ItemDataRole.UserRole))
@@ -1322,6 +1376,7 @@ class VoicemailManager(QMainWindow):
             if restore_target.exists():
                 QMessageBox.warning(self, "Recover Deleted", f"{selected_entry['filename']} already exists in the workspace.")
                 refresh_deleted_list()
+                logger.warning("Restore skipped because workspace file already exists: %s", selected_entry["filename"])
                 return
 
             try:
@@ -1342,6 +1397,7 @@ class VoicemailManager(QMainWindow):
 
                 shutil.rmtree(selected_entry["trash_dir"], ignore_errors=True)
                 self.refresh_list()
+                logger.info("Recovered voicemail: %s", selected_entry["filename"])
                 remaining_entries = refresh_deleted_list()
 
                 for row in range(self.list_widget.count()):
@@ -1354,6 +1410,7 @@ class VoicemailManager(QMainWindow):
                 if remaining_entries:
                     deleted_list.setCurrentRow(0)
             except Exception as e:
+                logger.exception("Recovery failed for %s: %s", selected_entry["filename"], e)
                 QMessageBox.warning(self, "Error", f"Recovery failed: {e}")
 
         restore_btn.clicked.connect(restore_selected_entry)
@@ -1437,6 +1494,7 @@ class VoicemailManager(QMainWindow):
     def prompt_rename(self):
         item = self.list_widget.currentItem()
         if not item:
+            logger.info("Rename requested with no selected voicemail")
             return
 
         self.media_player.stop()
@@ -1461,6 +1519,7 @@ class VoicemailManager(QMainWindow):
         if dialog.exec() == QInputDialog.DialogCode.Accepted:
             user_input = dialog.textValue().strip()
             if not user_input:
+                logger.info("Rename cancelled because no new name was provided")
                 return
 
             suffix = " VOICEMAIL" if not user_input.endswith(" VOICEMAIL") else ""
@@ -1489,7 +1548,9 @@ class VoicemailManager(QMainWindow):
                 try:
                     os.rename(ws_path, new_ws_path)
                     self.refresh_list()
+                    logger.info("Renamed voicemail from %s to %s", ws_path.name, new_name)
                 except Exception as e:
+                    logger.exception("Rename failed from %s to %s: %s", ws_path.name, new_name, e)
                     QMessageBox.critical(self, "Error", f"Rename failed: {e}")
                     self.refresh_list()
 
@@ -1498,6 +1559,7 @@ class VoicemailManager(QMainWindow):
         self.media_player.setSource(QUrl())
         item = self.list_widget.currentItem()
         if not item:
+            logger.info("Delete requested with no selected voicemail")
             return
 
         ws_path = Path(item.data(Qt.ItemDataRole.UserRole))
@@ -1514,8 +1576,12 @@ class VoicemailManager(QMainWindow):
             try:
                 self.move_voicemail_to_trash(ws_path)
                 self.refresh_list()
+                logger.info("Deleted voicemail to trash: %s", ws_path.name)
             except Exception as e:
+                logger.exception("Delete failed for %s: %s", ws_path.name, e)
                 QMessageBox.warning(self, "Error", f"Delete failed: {e}")
+        else:
+            logger.info("Delete cancelled for voicemail: %s", ws_path.name)
 
     def delete_all_files(self):
         self.media_player.stop()
@@ -1529,6 +1595,7 @@ class VoicemailManager(QMainWindow):
             if msg_box.layout():
                 msg_box.layout().setContentsMargins(20, 20, 20, 20)
             msg_box.exec()
+            logger.info("Delete all requested with no voicemails available")
             return
 
         confirmed = self.confirm_delete_action(
@@ -1546,9 +1613,11 @@ class VoicemailManager(QMainWindow):
                 for f in WORKSPACE_DIR.glob("*.wav"):
                     try:
                         self.move_voicemail_to_trash(f)
+                        logger.info("Deleted voicemail to trash during bulk delete: %s", f.name)
                     except Exception:
                         pass
             self.refresh_list()
+            logger.info("Bulk delete completed for %s voicemails", file_count)
 
             success_box = QMessageBox(self)
             success_box.setWindowTitle("Success")
@@ -1560,3 +1629,5 @@ class VoicemailManager(QMainWindow):
             if success_box.layout():
                 success_box.layout().setContentsMargins(20, 20, 20, 20)
             success_box.exec()
+        else:
+            logger.info("Bulk delete cancelled for %s voicemails", file_count)

@@ -4,6 +4,7 @@ import ctypes
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
+from app_logger import setup_logging, get_logger
 from constants import DARK_THEME_STYLE, ICON_PATH
 from manager import VoicemailManager
 
@@ -11,6 +12,7 @@ SINGLE_INSTANCE_MUTEX_NAME = "TMetricVoicemailManagerSingleInstance"
 WINDOW_TITLE = "T-Metric Voicemail Manager"
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
+logger = get_logger("main")
 
 
 def focus_existing_window():
@@ -46,16 +48,19 @@ def focus_existing_window():
 
 
 def main():
+    setup_logging()
+    logger.info("Application startup initiated")
     try:
         myappid = 'DustinMeyer.tmetrics.workspace.v2'
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
     except Exception as e:
-        print(f"Could not set AppUserModelID: {e}")
+        logger.exception("Could not set AppUserModelID: %s", e)
 
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX_NAME)
     if not mutex:
-        print("Could not create single-instance mutex.")
+        logger.error("Could not create single-instance mutex")
     elif ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+        logger.info("Second instance launch detected; focusing existing window")
         focus_existing_window()
         return
 
@@ -84,7 +89,9 @@ def main():
         window.setWindowIcon(QIcon(os.path.abspath(sys.executable)))
 
     window.show()
+    logger.info("Main window shown")
     exit_code = app.exec()
+    logger.info("Application exiting with code %s", exit_code)
 
     if mutex:
         ctypes.windll.kernel32.CloseHandle(mutex)

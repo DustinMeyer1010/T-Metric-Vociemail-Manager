@@ -1,11 +1,14 @@
 import os
 import struct
+from app_logger import get_logger, LOG_FILE
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication, QHBoxLayout,
-                             QComboBox, QStackedWidget, QCheckBox)
-from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF, pyqtSignal
+                             QComboBox, QStackedWidget, QCheckBox, QPlainTextEdit)
+from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF, pyqtSignal, QTimer
 from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen, QIcon, QPixmap, QPolygonF
 from constants import BASE_PATH, CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE
+
+logger = get_logger("ui")
 
 
 def theme_accent_color(theme):
@@ -143,6 +146,99 @@ class InfoDialog(QDialog):
         layout.addWidget(sound_desc)
         layout.addSpacing(4)
         layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+
+class LogViewerDialog(QDialog):
+    def __init__(self, theme, parent=None):
+        super().__init__(parent)
+        self.theme = theme
+        self.last_content = None
+        self.setWindowTitle("Application Logs")
+        self.resize(860, 540)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Application Logs")
+        title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        layout.addWidget(title)
+
+        subtitle = QLabel(f"Live view of {LOG_FILE}")
+        subtitle.setWordWrap(True)
+        subtitle.setFont(QFont("Segoe UI", 9))
+        layout.addWidget(subtitle)
+
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log_view.setFont(QFont("Consolas", 9))
+        layout.addWidget(self.log_view, stretch=1)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        self.refresh_btn = QPushButton("Refresh")
+        self.close_btn = QPushButton("Close")
+        self.refresh_btn.clicked.connect(self.refresh_log_contents)
+        self.close_btn.clicked.connect(self.close)
+        button_layout.addWidget(self.refresh_btn)
+        button_layout.addWidget(self.close_btn)
+        layout.addLayout(button_layout)
+
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setInterval(1000)
+        self.refresh_timer.timeout.connect(self.refresh_log_contents)
+        self.refresh_timer.start()
+
+        self.apply_theme(theme)
+        self.refresh_log_contents()
+
+    def refresh_log_contents(self):
+        try:
+            if LOG_FILE.exists():
+                content = LOG_FILE.read_text(encoding="utf-8", errors="replace")
+            else:
+                content = "Log file has not been created yet."
+        except Exception as e:
+            content = f"Unable to read log file.\n\n{e}"
+
+        if content == self.last_content:
+            return
+
+        scrollbar = self.log_view.verticalScrollBar()
+        was_at_bottom = scrollbar.value() >= scrollbar.maximum() - 4
+        self.log_view.setPlainText(content)
+        self.last_content = content
+        if was_at_bottom:
+            scrollbar.setValue(scrollbar.maximum())
+
+    def apply_theme(self, theme):
+        self.theme = theme
+        self.setStyleSheet(theme_stylesheet(theme))
+
+        _, desc_color = theme_text_colors(theme)
+        for label in self.findChildren(QLabel):
+            label.setStyleSheet(f"color: {desc_color};")
+
+        if theme == "dark":
+            editor_style = (
+                "QPlainTextEdit { background-color: #11181C; color: #E6F1F5; "
+                "border: 1px solid #37474F; border-radius: 6px; padding: 8px; }"
+            )
+        elif theme == "cartoon":
+            editor_style = (
+                "QPlainTextEdit { background-color: #FFFDF7; color: #243B53; "
+                "border: 2px solid #243B53; border-radius: 8px; padding: 8px; }"
+            )
+        else:
+            editor_style = (
+                "QPlainTextEdit { background-color: #FFFFFF; color: #1F2937; "
+                "border: 1px solid #CBD5E1; border-radius: 6px; padding: 8px; }"
+            )
+        self.log_view.setStyleSheet(editor_style)
 
 
 class SettingsDialog(QWidget):
@@ -322,6 +418,11 @@ class SettingsDialog(QWidget):
         self.info_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         help_layout.addWidget(self.info_btn)
 
+        self.view_logs_btn = QPushButton("View Application Logs")
+        self.view_logs_btn.setFont(QFont("Segoe UI", 9))
+        self.view_logs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        help_layout.addWidget(self.view_logs_btn)
+
         self.github_btn = QPushButton("Source Code - GitHub")
         self.github_btn.setFont(QFont("Segoe UI", 9))
         self.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -351,6 +452,7 @@ class SettingsDialog(QWidget):
     def on_sidebar_changed(self, index):
         if index >= 0:
             self.pages.setCurrentIndex(index)
+            logger.debug("Settings section changed to index %s", index)
 
     def apply_theme(self, theme):
         self.theme = theme
@@ -394,6 +496,8 @@ class SettingsDialog(QWidget):
             action_buttons.append(self.recover_deleted_btn)
         if hasattr(self, 'info_btn'):
             action_buttons.append(self.info_btn)
+        if hasattr(self, 'view_logs_btn'):
+            action_buttons.append(self.view_logs_btn)
         if hasattr(self, 'open_tmetrics_folder_btn'):
             action_buttons.append(self.open_tmetrics_folder_btn)
         if hasattr(self, 'open_tmetrics_ringtones_btn'):
@@ -485,7 +589,7 @@ class WaveformProgressBar(QWidget):
                     if len(self.peaks) >= target_bars:
                         break
         except Exception as e:
-            print(f"Error parsing waveform peaks: {e}")
+            logger.exception("Error parsing waveform peaks: %s", e)
             self.peaks = []
 
         self.update()
