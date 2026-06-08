@@ -5,46 +5,13 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
 from app_logger import setup_logging, get_logger
-from constants import DARK_THEME_STYLE, ICON_PATH
+from constants import DARK_THEME_STYLE, ICON_PATH, SINGLE_INSTANCE_MUTEX_NAME, WINDOW_TITLE, ERROR_ALREADY_EXISTS
+from windows_utils import focus_existing_window
 from manager import VoicemailManager
-
-SINGLE_INSTANCE_MUTEX_NAME = "TMetricVoicemailManagerSingleInstance"
-WINDOW_TITLE = "T-Metric Voicemail Manager"
-ERROR_ALREADY_EXISTS = 183
-SW_RESTORE = 9
 logger = get_logger("main")
 
 
-def focus_existing_window():
-    matching_hwnd = {"value": None}
-
-    def enum_windows_callback(hwnd, lparam):
-        if not ctypes.windll.user32.IsWindowVisible(hwnd):
-            return True
-
-        length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
-        if length <= 0:
-            return True
-
-        buffer = ctypes.create_unicode_buffer(length + 1)
-        ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-        if buffer.value.strip() == WINDOW_TITLE:
-            matching_hwnd["value"] = hwnd
-            return False
-
-        return True
-
-    enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)(enum_windows_callback)
-    ctypes.windll.user32.EnumWindows(enum_proc, 0)
-
-    hwnd = matching_hwnd["value"]
-    if hwnd:
-        ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
-        ctypes.windll.user32.BringWindowToTop(hwnd)
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
-        return True
-
-    return False
+# Focus helper extracted to `windows_utils.py`
 
 
 def main():

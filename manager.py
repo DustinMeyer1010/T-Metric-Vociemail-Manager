@@ -58,8 +58,11 @@ class VoicemailManager(QMainWindow):
         self.media_player.setAudioOutput(self.audio_output)
         self.notification_player = QMediaPlayer()
         self.notification_audio_output = QAudioOutput()
-        self.notification_audio_output.setVolume(0.8)
         self.notification_player.setAudioOutput(self.notification_audio_output)
+        self.voicemail_volume = 1.0  # Default volume (0.0 to 1.0)
+        self.notification_volume = 0.8  # Default notification volume (0.0 to 1.0)
+        self.audio_output.setVolume(self.voicemail_volume)
+        self.notification_audio_output.setVolume(self.notification_volume)
         self.selected_sound_file = None
         self.available_sounds = []
         self.audio_device_name = "System Default"
@@ -346,6 +349,8 @@ class VoicemailManager(QMainWindow):
         self.settings_view.sound_combo.currentTextChanged.connect(self.on_settings_sound_changed)
         self.settings_view.include_notes_drag_cb.stateChanged.connect(self.on_include_notes_drag_changed)
         self.settings_view.ask_before_delete_cb.stateChanged.connect(self.on_ask_before_delete_changed)
+        self.settings_view.volume_slider.valueChanged.connect(self.on_voicemail_volume_changed)
+        self.settings_view.notification_volume_slider.valueChanged.connect(self.on_notification_volume_changed)
 
     def populate_settings_view(self):
         # Populate audio devices
@@ -365,6 +370,8 @@ class VoicemailManager(QMainWindow):
         dialog.theme_combo.blockSignals(True)
         dialog.include_notes_drag_cb.blockSignals(True)
         dialog.ask_before_delete_cb.blockSignals(True)
+        dialog.volume_slider.blockSignals(True)
+        dialog.notification_volume_slider.blockSignals(True)
 
         dialog.apply_theme(self.current_theme)
         dialog.device_combo.clear()
@@ -379,6 +386,16 @@ class VoicemailManager(QMainWindow):
         dialog.theme_combo.setCurrentText(self.current_theme.title())
         dialog.include_notes_drag_cb.setChecked(self.include_notes_in_drag_drop)
         dialog.ask_before_delete_cb.setChecked(self.ask_before_delete)
+        
+        # Set volume slider and label
+        volume_percent = int(self.voicemail_volume * 100)
+        dialog.volume_slider.setValue(volume_percent)
+        dialog.volume_value_label.setText(f"{volume_percent}%")
+        
+        # Set notification volume slider and label
+        notification_volume_percent = int(self.notification_volume * 100)
+        dialog.notification_volume_slider.setValue(notification_volume_percent)
+        dialog.notification_volume_value_label.setText(f"{notification_volume_percent}%")
 
         self.refresh_sounds_in_dialog(dialog, getattr(self, 'sound_combo_current_text', DEFAULT_SOUND_LABEL))
 
@@ -386,6 +403,8 @@ class VoicemailManager(QMainWindow):
         dialog.theme_combo.blockSignals(False)
         dialog.include_notes_drag_cb.blockSignals(False)
         dialog.ask_before_delete_cb.blockSignals(False)
+        dialog.volume_slider.blockSignals(False)
+        dialog.notification_volume_slider.blockSignals(False)
 
         dialog.device_combo.currentIndexChanged.connect(
             lambda index, devices=available_devices: self.on_settings_audio_device_changed(index, devices)
@@ -466,46 +485,22 @@ class VoicemailManager(QMainWindow):
         logger.info("Bootstrap completed")
 
     def copy_default_sounds(self):
-        """Copy default sounds to the AppData sounds directory if they don't already exist"""
-        # Determine the source directory for default sounds
-        if getattr(sys, 'frozen', False):
-            # Running as compiled executable
-            base_path = sys._MEIPASS
-        else:
-            # Running as script
-            base_path = os.path.dirname(os.path.abspath(__file__))
-        
-        default_sounds_path = os.path.join(base_path, 'default_sounds')
-        
-        if not os.path.exists(default_sounds_path):
-            return
-        
-        for sound_file in os.listdir(default_sounds_path):
-            if sound_file.endswith(('.wav', '.mp3', '.flac', '.ogg')):
-                source_file = os.path.join(default_sounds_path, sound_file)
-                target_file = SOUNDS_DIR / sound_file
-                if not target_file.exists():
-                    try:
-                        shutil.copy2(source_file, target_file)
-                    except Exception as e:
-                        logger.exception("Error copying default sound %s: %s", sound_file, e)
+        from manager_utils import copy_default_sounds as _copy_default_sounds
+        try:
+            _copy_default_sounds()
+        except Exception as e:
+            logger.exception("Error copying default sounds: %s", e)
 
     def handle_directory_changed_with_delay(self):
         QTimer.singleShot(300, self.sync_from_source)
 
     def get_wav_duration(self, file_path):
+        from manager_utils import get_wav_duration as _get_wav_duration
         try:
-            with open(file_path, 'rb') as f:
-                riff_header = f.read(44)
-                if len(riff_header) < 44:
-                    return 0
-                byte_rate = struct.unpack('<I', riff_header[28:32])[0]
-                data_size = struct.unpack('<I', riff_header[40:44])[0]
-                if byte_rate > 0 and data_size > 0:
-                    return int(data_size / byte_rate)
+            return _get_wav_duration(file_path)
         except Exception as e:
             logger.exception("Error parsing metadata header: %s", e)
-        return 0
+            return 0
 
     def on_item_selected(self):
         item = self.list_widget.currentItem()
@@ -696,8 +691,15 @@ class VoicemailManager(QMainWindow):
                 self.tmetrics_popup_detected = True
                 logger.info("T-Metrics popup detected")
 
-                # Restore/unminimize the Voicemail Manager app
-                self.restore_manager_window()
+                # Ensure the manager is topmost but do NOT steal focus or unminimize
+                try:
+                    self.ensure_manager_topmost()
+                except Exception:
+                    # Fallback to original behavior only if needed
+                    try:
+                        self.restore_manager_window()
+                    except Exception:
+                        pass
 
                 # Play selected notification sound once
                 self.play_notification_sound()
@@ -763,6 +765,18 @@ class VoicemailManager(QMainWindow):
                     self.include_notes_in_drag_drop = lines[6].strip() == "True" if len(lines) > 6 else False
                     self.list_widget.include_note_in_drag = self.include_notes_in_drag_drop
                     self.ask_before_delete = lines[7].strip() != "False" if len(lines) > 7 else True
+                    
+                    # Load voicemail volume (0-100)
+                    volume_percent = int(lines[8].strip()) if len(lines) > 8 else 100
+                    volume_percent = max(0, min(100, volume_percent))  # Clamp between 0 and 100
+                    self.voicemail_volume = volume_percent / 100.0
+                    self.audio_output.setVolume(self.voicemail_volume)
+                    
+                    # Load notification volume (0-100)
+                    notification_volume_percent = int(lines[9].strip()) if len(lines) > 9 else 80
+                    notification_volume_percent = max(0, min(100, notification_volume_percent))  # Clamp between 0 and 100
+                    self.notification_volume = notification_volume_percent / 100.0
+                    self.notification_audio_output.setVolume(self.notification_volume)
             except Exception as e:
                 logger.exception("Error loading config: %s", e)
             finally:
@@ -782,6 +796,10 @@ class VoicemailManager(QMainWindow):
                 f.write(f"{getattr(self, 'audio_device_name', 'System Default')}\n")
                 f.write(f"{getattr(self, 'include_notes_in_drag_drop', False)}\n")
                 f.write(f"{getattr(self, 'ask_before_delete', True)}\n")
+                volume_percent = int(self.voicemail_volume * 100)
+                f.write(f"{volume_percent}\n")
+                notification_volume_percent = int(self.notification_volume * 100)
+                f.write(f"{notification_volume_percent}\n")
         except Exception as e:
             logger.exception("Error saving config: %s", e)
 
@@ -818,6 +836,22 @@ class VoicemailManager(QMainWindow):
     def on_ask_before_delete_changed(self, state):
         self.ask_before_delete = bool(state)
         logger.info("Ask before delete set to: %s", self.ask_before_delete)
+        self.save_config()
+
+    def on_voicemail_volume_changed(self, value):
+        """Handle voicemail volume slider changes"""
+        self.voicemail_volume = value / 100.0
+        self.audio_output.setVolume(self.voicemail_volume)
+        self.settings_view.volume_value_label.setText(f"{value}%")
+        logger.info("Voicemail volume set to: %d%%", value)
+        self.save_config()
+
+    def on_notification_volume_changed(self, value):
+        """Handle notification volume slider changes"""
+        self.notification_volume = value / 100.0
+        self.notification_audio_output.setVolume(self.notification_volume)
+        self.settings_view.notification_volume_value_label.setText(f"{value}%")
+        logger.info("Notification volume set to: %d%%", value)
         self.save_config()
 
     def close_explorer_at_location(self):
@@ -1144,6 +1178,24 @@ class VoicemailManager(QMainWindow):
 
         except Exception as e:
             logger.exception("Error restoring manager window: %s", e)
+
+
+    def ensure_manager_topmost(self):
+        """Ensure the Voicemail Manager window is set to topmost without stealing focus or unminimizing it."""
+        try:
+            manager_hwnd = int(self.winId())
+            if manager_hwnd:
+                ctypes.windll.user32.SetWindowPos(
+                    manager_hwnd,
+                    HWND_TOPMOST,
+                    0,
+                    0,
+                    0,
+                    0,
+                    TOPMOST_FLAGS
+                )
+        except Exception as e:
+            logger.exception("Error ensuring manager topmost: %s", e)
 
 
     def open_project_link(self):

@@ -7,6 +7,11 @@ SOURCE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "ACD Agent Module" 
 TMETRIC_RINGTONES_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "SIP Softphone" / "Ringtones"
 ICON_PATH = "URMC.ico"
 
+# Application/window identifiers
+WINDOW_TITLE = "T-Metric Voicemail Manager"
+SINGLE_INSTANCE_MUTEX_NAME = "TMetricVoicemailManagerSingleInstance"
+ERROR_ALREADY_EXISTS = 183
+
 CACHE_DIR = Path(os.getenv('APPDATA')) / "T-Metrics, Inc" / "VoicemailManager"
 WORKSPACE_DIR = CACHE_DIR / "Voicemail_Workspace"
 SOUNDS_DIR = CACHE_DIR / "Voicemail_Sounds"

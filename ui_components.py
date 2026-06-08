@@ -3,7 +3,7 @@ import struct
 from app_logger import get_logger, LOG_FILE
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QPushButton,
                              QWidget, QListWidget, QApplication, QHBoxLayout,
-                             QComboBox, QStackedWidget, QCheckBox, QPlainTextEdit)
+                             QComboBox, QStackedWidget, QCheckBox, QPlainTextEdit, QSlider)
 from PyQt6.QtCore import Qt, QUrl, QRectF, QMimeData, QSize, QPointF, pyqtSignal, QTimer
 from PyQt6.QtGui import QDrag, QFont, QColor, QPainter, QBrush, QPen, QIcon, QPixmap, QPolygonF
 from constants import BASE_PATH, CARTOON_THEME_STYLE, DARK_THEME_STYLE, LIGHT_THEME_STYLE
@@ -27,6 +27,82 @@ def theme_text_colors(theme):
     if theme == 'cartoon':
         return "#243B53", "#243B53"
     return ("#00E5FF", "#ECEFF1") if theme == 'dark' else ("#2563EB", "#1F2937")
+
+
+def slider_stylesheet(theme):
+    """Create theme-aware stylesheet for QSlider widgets"""
+    if theme == 'dark':
+        return """
+            QSlider::groove:horizontal {
+                background-color: #37474F;
+                height: 8px;
+                border-radius: 4px;
+                border: 1px solid #546E7A;
+            }
+            QSlider::handle:horizontal {
+                background-color: #009688;
+                width: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+                border: 1px solid #00BFA5;
+            }
+            QSlider::handle:horizontal:hover {
+                background-color: #00BFA5;
+                border: 1px solid #00E5FF;
+            }
+            QSlider::sub-page:horizontal {
+                background-color: #009688;
+                border-radius: 4px;
+            }
+        """
+    elif theme == 'cartoon':
+        return """
+            QSlider::groove:horizontal {
+                background-color: #E9ECEF;
+                height: 8px;
+                border-radius: 4px;
+                border: 2px solid #243B53;
+            }
+            QSlider::handle:horizontal {
+                background-color: #FFB703;
+                width: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+                border: 2px solid #FD7E14;
+            }
+            QSlider::handle:horizontal:hover {
+                background-color: #FD7E14;
+                border: 2px solid #FB5607;
+            }
+            QSlider::sub-page:horizontal {
+                background-color: #FFB703;
+                border-radius: 4px;
+            }
+        """
+    else:  # light
+        return """
+            QSlider::groove:horizontal {
+                background-color: #E5E7EB;
+                height: 8px;
+                border-radius: 4px;
+                border: 1px solid #CBD5E1;
+            }
+            QSlider::handle:horizontal {
+                background-color: #2563EB;
+                width: 18px;
+                margin: -5px 0;
+                border-radius: 9px;
+                border: 1px solid #1E40AF;
+            }
+            QSlider::handle:horizontal:hover {
+                background-color: #1E40AF;
+                border: 1px solid #1E3A8A;
+            }
+            QSlider::sub-page:horizontal {
+                background-color: #2563EB;
+                border-radius: 4px;
+            }
+        """
 
 
 def folder_icon(theme):
@@ -298,6 +374,27 @@ class SettingsDialog(QWidget):
         self.device_combo.setFont(QFont("Segoe UI", 9))
         audio_layout.addWidget(self.device_combo)
 
+        volume_label = QLabel("Voicemail Volume:")
+        volume_label.setFont(QFont("Segoe UI", 9))
+        audio_layout.addWidget(volume_label)
+
+        volume_layout = QHBoxLayout()
+        volume_layout.setSpacing(8)
+        
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setMinimum(0)
+        self.volume_slider.setMaximum(100)
+        self.volume_slider.setValue(100)
+        self.volume_slider.setFixedHeight(24)
+        volume_layout.addWidget(self.volume_slider)
+        
+        self.volume_value_label = QLabel("100%")
+        self.volume_value_label.setFont(QFont("Segoe UI", 9))
+        self.volume_value_label.setFixedWidth(40)
+        volume_layout.addWidget(self.volume_value_label)
+        
+        audio_layout.addLayout(volume_layout)
+
         sound_label = QLabel("Notification Sound:")
         sound_label.setFont(QFont("Segoe UI", 9))
         audio_layout.addWidget(sound_label)
@@ -330,6 +427,27 @@ class SettingsDialog(QWidget):
         self.open_sounds_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         sound_combo_layout.addWidget(self.open_sounds_folder_btn)
         audio_layout.addLayout(sound_combo_layout)
+
+        notification_volume_label = QLabel("Notification Sound Volume:")
+        notification_volume_label.setFont(QFont("Segoe UI", 9))
+        audio_layout.addWidget(notification_volume_label)
+
+        notification_volume_layout = QHBoxLayout()
+        notification_volume_layout.setSpacing(8)
+        
+        self.notification_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.notification_volume_slider.setMinimum(0)
+        self.notification_volume_slider.setMaximum(100)
+        self.notification_volume_slider.setValue(80)
+        self.notification_volume_slider.setFixedHeight(24)
+        notification_volume_layout.addWidget(self.notification_volume_slider)
+        
+        self.notification_volume_value_label = QLabel("80%")
+        self.notification_volume_value_label.setFont(QFont("Segoe UI", 9))
+        self.notification_volume_value_label.setFixedWidth(40)
+        notification_volume_layout.addWidget(self.notification_volume_value_label)
+        
+        audio_layout.addLayout(notification_volume_layout)
 
         audio_layout.addStretch()
 
@@ -467,6 +585,13 @@ class SettingsDialog(QWidget):
             self.open_sounds_folder_btn.setIcon(folder_icon(theme))
         if hasattr(self, 'test_sound_btn'):
             self.test_sound_btn.setIcon(play_icon(theme))
+
+        # Apply slider styling to volume sliders
+        slider_style = slider_stylesheet(theme)
+        if hasattr(self, 'volume_slider'):
+            self.volume_slider.setStyleSheet(slider_style)
+        if hasattr(self, 'notification_volume_slider'):
+            self.notification_volume_slider.setStyleSheet(slider_style)
 
         if hasattr(self, 'sidebar'):
             if theme == 'dark':
